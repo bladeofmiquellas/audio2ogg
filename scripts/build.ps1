@@ -125,14 +125,22 @@ try {
     & $PythonExe -m pip install --upgrade pip
     & $PythonExe -m pip install -r requirements.txt
 
-    Write-Host "Generating icon..."
-    & $PythonExe make_icon.py
-
     $iconArg = @()
-    $iconPath = Join-Path $projectRoot "assets\icon.ico"
-    if (Test-Path $iconPath) {
-        $iconArg = @("--icon", $iconPath)
-        Write-Host "Using icon: $iconPath"
+    $addIconData = @()
+    $pngPath = Join-Path $projectRoot "assets\icon.png"
+    $icoPath = Join-Path $projectRoot "assets\icon.ico"
+
+    if (Test-Path $pngPath) {
+        Write-Host "Converting icon.png to icon.ico..."
+        & $PythonExe -c @"
+from PIL import Image
+img = Image.open(r'$pngPath').convert('RGBA')
+frames = [img.resize((s, s), Image.LANCZOS) for s in [256,128,64,48,32,16]]
+frames[0].save(r'$icoPath', format='ICO', append_images=frames[1:])
+"@
+        $iconArg    = @("--icon", $icoPath)
+        $addIconData = @("--add-data", "assets/icon.png;assets", "--add-data", "assets/icon.ico;assets")
+        Write-Host "Icon ready."
     }
 
     & $PythonExe -m PyInstaller `
@@ -141,10 +149,26 @@ try {
         --windowed `
         --onefile `
         --name "audio2ogg" `
+        --distpath "build" `
+        --workpath "_tmp" `
         --add-binary "vendor/ffmpeg.exe;ffmpeg" `
-        --add-data "assets/icon.ico;assets" `
+        --add-data "changelog.json;." `
+        @addIconData `
         @iconArg `
-        app.py
+        --exclude-module unittest `
+        --exclude-module pydoc `
+        --exclude-module doctest `
+        --exclude-module lib2to3 `
+        --exclude-module xmlrpc `
+        --exclude-module sqlite3 `
+        --exclude-module tkinter.test `
+        --exclude-module PIL.JpegImagePlugin `
+        --exclude-module PIL.TiffImagePlugin `
+        --exclude-module PIL.GifImagePlugin `
+        --exclude-module PIL.BmpImagePlugin `
+        --exclude-module PIL.WebPImagePlugin `
+        --exclude-module PIL.IcoImagePlugin `
+        run.py
 }
 finally {
     Pop-Location
@@ -152,4 +176,4 @@ finally {
 
 Write-Host ""
 Write-Host "Build complete:"
-Write-Host "dist\audio2ogg.exe"
+Write-Host "build\audio2ogg.exe"

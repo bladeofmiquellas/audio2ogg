@@ -1,0 +1,34 @@
+[
+  {
+    "version": "0.1",
+    "changes": {
+      "en": [
+        "Batch audio to OGG conversion via ffmpeg",
+        "Drag and drop support",
+        "Multilingual UI: English, Russian, Chinese",
+        "Keyboard shortcuts (layout-independent)",
+        "Persistent settings (language, output folder)",
+        "Conversion progress bar",
+        "Conversion summary dialog with open-folder button"
+      ],
+      "ru": [
+        "Пакетная конвертация аудио в OGG через ffmpeg",
+        "Поддержка перетаскивания файлов",
+        "Многоязычный интерфейс: английский, русский, китайский",
+        "Горячие клавиши (не зависят от раскладки)",
+        "Сохранение настроек (язык, папка экспорта)",
+        "Прогресс-бар конвертации",
+        "Итоговое окно с кнопкой открытия папки"
+      ],
+      "zh": [
+        "通过 ffmpeg 批量转换音频为 OGG 格式",
+        "支持拖放文件",
+        "多语言界面：英语、俄语、中文",
+        "快捷键（与键盘布局无关）",
+        "持久化设置（语言、输出文件夹）",
+        "转换进度条",
+        "转换完成后显示摘要对话框并可打开文件夹"
+      ]
+    }
+  }
+]
