@@ -1,5 +1,7 @@
 # audio2ogg
 
+<img width="756" height="501" alt="{62AE83B8-306A-44E4-A082-23BED4C2710C}" src="https://github.com/user-attachments/assets/dc7118d1-51f6-4a30-a865-850d1f2b2264" />
+
 Windows GUI app for batch-converting audio files to OGG via ffmpeg. Ships as a single portable `.exe` with ffmpeg bundled inside.
 
 ## Usage
