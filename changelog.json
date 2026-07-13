@@ -1,5 +1,43 @@
 [
   {
+    "version": "0.2",
+    "changes": {
+      "en": [
+        "Configurable quality: low, medium, or high",
+        "Channel mode: as in source, mono, or stereo",
+        "Sample rate: 8 000-96 000 Hz, default 48 000 Hz",
+        "Tooltips on all interface elements",
+        "File list summary with total count and duration",
+        "Sound notification when conversion completes",
+        "Styled file list with alternating rows and per-track duration",
+        "Drag-and-drop folders to add all audio files inside",
+        "Conflict dialog when an output file already exists"
+      ],
+      "ru": [
+        "Настраиваемое качество: низкое, среднее или высокое",
+        "Режим каналов: как в оригинале, моно или стерео",
+        "Частота дискретизации: 8 000-96 000 Гц, по умолчанию 48 000 Гц",
+        "Подсказки при наведении на все элементы интерфейса",
+        "Счётчик файлов и общая длительность в списке",
+        "Звуковой сигнал по завершении конвертации",
+        "Оформленный список файлов с чередующимися строками и длительностью каждого трека",
+        "Перетаскивание папок с добавлением всех аудиофайлов внутри",
+        "Диалог выбора действия при совпадении имени выходного файла"
+      ],
+      "zh": [
+        "可配置质量：低、中或高",
+        "声道模式：与源文件相同、单声道或立体声",
+        "采样率：8 000-96 000 Hz，默认 48 000 Hz",
+        "所有界面元素均支持悬停提示",
+        "文件列表显示数量和总时长",
+        "转换完成时播放提示音",
+        "文件列表采用交替行样式并显示每个文件的时长",
+        "支持拖放文件夹并添加其中的所有音频文件",
+        "输出文件已存在时弹出冲突处理对话框"
+      ]
+    }
+  },
+  {
     "version": "0.1",
     "changes": {
       "en": [

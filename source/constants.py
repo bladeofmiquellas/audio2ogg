@@ -1,4 +1,4 @@
-__version__ = "0.1"
+__version__ = "0.2"
 
 
 AUDIO_EXTENSIONS = {
@@ -28,6 +28,36 @@ LANGUAGE_OPTIONS = {
     "中文": "zh",
 }
 
+QUALITY_CHOICES: list[tuple[str, str]] = [
+    ("low", "quality_option_low"),
+    ("medium", "quality_option_medium"),
+    ("high", "quality_option_high"),
+]
+
+QUALITY_QA: dict[str, int] = {
+    "low": 3,
+    "medium": 5,
+    "high": 7,
+}
+
+CHANNEL_CHOICES: list[tuple[str, str]] = [
+    ("original", "channels_option_original"),
+    ("1", "channels_option_mono"),
+    ("2", "channels_option_stereo"),
+]
+
+SAMPLE_RATE_CHOICES: list[tuple[str, str]] = [
+    ("8000", "sample_rate_option_8000"),
+    ("11025", "sample_rate_option_11025"),
+    ("16000", "sample_rate_option_16000"),
+    ("22050", "sample_rate_option_22050"),
+    ("32000", "sample_rate_option_32000"),
+    ("44100", "sample_rate_option_44100"),
+    ("48000", "sample_rate_option_48000"),
+    ("88200", "sample_rate_option_88200"),
+    ("96000", "sample_rate_option_96000"),
+]
+
 TRANSLATIONS: dict[str, dict] = {
     "en": {
         "window_title": "audio2ogg",
@@ -38,8 +68,53 @@ TRANSLATIONS: dict[str, dict] = {
         "settings_frame_title": "Application settings",
         "language_label": "Language:",
         "output_dir_label": "Output folder:",
+        "quality_label": "Quality:",
+        "quality_option_low": "Low",
+        "quality_option_medium": "Medium",
+        "quality_option_high": "High",
+        "channels_label": "Channels:",
+        "sample_rate_label": "Sample rate:",
+        "channels_option_original": "Original",
+        "channels_option_mono": "Mono",
+        "channels_option_stereo": "Stereo",
+        "sample_rate_option_8000": "8 000 Hz",
+        "sample_rate_option_11025": "11 025 Hz",
+        "sample_rate_option_16000": "16 000 Hz",
+        "sample_rate_option_22050": "22 050 Hz",
+        "sample_rate_option_32000": "32 000 Hz",
+        "sample_rate_option_44100": "44 100 Hz",
+        "sample_rate_option_48000": "48 000 Hz",
+        "sample_rate_option_88200": "88 200 Hz",
+        "sample_rate_option_96000": "96 000 Hz",
+        "conflict_dialog_title": "File already exists",
+        "conflict_dialog_message": "{name} already exists in the output folder.",
+        "conflict_btn_overwrite": "Overwrite",
+        "conflict_btn_skip": "Skip",
+        "conflict_btn_rename": "Rename",
+        "conflict_apply_all": "Apply to all remaining files",
+        "tooltip_output_dir": "Folder where converted .ogg files are saved.",
+        "tooltip_quality": (
+            "OGG compression level. Low - speech and simple sounds, smaller files. "
+            "Medium - balanced default. High - music, larger files."
+        ),
+        "tooltip_channels": (
+            "Number of channels in the output file. "
+            "Keep source channels, or force mono or stereo."
+        ),
+        "tooltip_sample_rate": (
+            "Output sample rate in Hz. The lower the value, the lower the quality "
+            "and the smaller the file. 44 100 Hz is CD quality."
+        ),
+        "tooltip_add_files": "Add audio files to the list (Ctrl+O).",
+        "tooltip_remove_selected": "Remove selected files from the list (Delete).",
+        "tooltip_clear_list": "Remove all files from the list (Ctrl+L).",
+        "tooltip_convert": "Start converting all listed files to OGG (Ctrl+Enter).",
+        "tooltip_language": "Interface language. The choice is remembered on next launch.",
+        "tooltip_changelog": "View version history and release notes.",
         "choose_button": "Choose...",
-        "drop_frame_title": "Drag and drop audio files here",
+        "drop_frame_title": "Drag and drop audio files or folders here",
+        "list_summary_empty": "No files",
+        "list_duration_pending": "...",
         "add_files_button": "Add files",
         "remove_selected_button": "Remove selected",
         "clear_list_button": "Clear list",
@@ -67,7 +142,9 @@ TRANSLATIONS: dict[str, dict] = {
         "log_ok": "OK: {name}",
         "log_error_unknown": "Unknown ffmpeg error.",
         "log_error": "ERROR: {name} | {err}",
+        "log_skipped_exists": "Skipped (already exists): {name}",
         "log_done": "Done. Successful: {ok}, failed: {failed}",
+        "log_done_skipped": ", skipped: {skipped}",
         "language_switched": "Language switched to English.",
         "help_shortcuts_title": "Keyboard shortcuts",
         "help_shortcuts": [
@@ -93,8 +170,53 @@ TRANSLATIONS: dict[str, dict] = {
         "settings_frame_title": "Настройки приложения",
         "language_label": "Язык:",
         "output_dir_label": "Папка экспорта:",
+        "quality_label": "Качество:",
+        "quality_option_low": "Низкое",
+        "quality_option_medium": "Среднее",
+        "quality_option_high": "Высокое",
+        "channels_label": "Каналы:",
+        "sample_rate_label": "Частота дискретизации:",
+        "channels_option_original": "Оригинал",
+        "channels_option_mono": "Моно",
+        "channels_option_stereo": "Стерео",
+        "sample_rate_option_8000": "8 000 Гц",
+        "sample_rate_option_11025": "11 025 Гц",
+        "sample_rate_option_16000": "16 000 Гц",
+        "sample_rate_option_22050": "22 050 Гц",
+        "sample_rate_option_32000": "32 000 Гц",
+        "sample_rate_option_44100": "44 100 Гц",
+        "sample_rate_option_48000": "48 000 Гц",
+        "sample_rate_option_88200": "88 200 Гц",
+        "sample_rate_option_96000": "96 000 Гц",
+        "conflict_dialog_title": "Файл уже существует",
+        "conflict_dialog_message": "{name} уже есть в папке экспорта.",
+        "conflict_btn_overwrite": "Перезаписать",
+        "conflict_btn_skip": "Пропустить",
+        "conflict_btn_rename": "Переименовать",
+        "conflict_apply_all": "Применить ко всем оставшимся",
+        "tooltip_output_dir": "Папка, куда сохраняются сконвертированные .ogg файлы.",
+        "tooltip_quality": (
+            "Уровень сжатия OGG. Низкое - речь и простые звуки, меньше файл. "
+            "Среднее - универсальный вариант. Высокое - музыка, больше файл."
+        ),
+        "tooltip_channels": (
+            "Количество каналов в выходном файле. "
+            "Оставить как в оригинале, моно или стерео."
+        ),
+        "tooltip_sample_rate": (
+            "Частота дискретизации результата. Чем меньше Гц, тем ниже качество "
+            "и меньше размер файла. 44 100 Гц - качество CD."
+        ),
+        "tooltip_add_files": "Добавить аудиофайлы в список (Ctrl+O).",
+        "tooltip_remove_selected": "Удалить выделенные файлы из списка (Delete).",
+        "tooltip_clear_list": "Очистить весь список файлов (Ctrl+L).",
+        "tooltip_convert": "Запустить конвертацию всех файлов в OGG (Ctrl+Enter).",
+        "tooltip_language": "Язык интерфейса. Выбор запоминается при следующем запуске.",
+        "tooltip_changelog": "История версий и список изменений.",
         "choose_button": "Выбрать...",
-        "drop_frame_title": "Перетащите аудиофайлы сюда",
+        "drop_frame_title": "Перетащите аудиофайлы или папку сюда",
+        "list_summary_empty": "Нет файлов",
+        "list_duration_pending": "...",
         "add_files_button": "Добавить файлы",
         "remove_selected_button": "Удалить выбранные",
         "clear_list_button": "Очистить список",
@@ -122,7 +244,9 @@ TRANSLATIONS: dict[str, dict] = {
         "log_ok": "OK: {name}",
         "log_error_unknown": "Неизвестная ошибка ffmpeg.",
         "log_error": "ERROR: {name} | {err}",
+        "log_skipped_exists": "Пропущено (уже существует): {name}",
         "log_done": "Готово. Успешно: {ok}, с ошибками: {failed}",
+        "log_done_skipped": ", пропущено: {skipped}",
         "language_switched": "Язык переключен на русский.",
         "help_shortcuts_title": "Горячие клавиши",
         "help_shortcuts": [
@@ -148,8 +272,53 @@ TRANSLATIONS: dict[str, dict] = {
         "settings_frame_title": "应用设置",
         "language_label": "语言：",
         "output_dir_label": "输出文件夹：",
+        "quality_label": "质量：",
+        "quality_option_low": "低",
+        "quality_option_medium": "中",
+        "quality_option_high": "高",
+        "channels_label": "声道：",
+        "sample_rate_label": "采样率：",
+        "channels_option_original": "原始",
+        "channels_option_mono": "单声道",
+        "channels_option_stereo": "立体声",
+        "sample_rate_option_8000": "8 000 Hz",
+        "sample_rate_option_11025": "11 025 Hz",
+        "sample_rate_option_16000": "16 000 Hz",
+        "sample_rate_option_22050": "22 050 Hz",
+        "sample_rate_option_32000": "32 000 Hz",
+        "sample_rate_option_44100": "44 100 Hz",
+        "sample_rate_option_48000": "48 000 Hz",
+        "sample_rate_option_88200": "88 200 Hz",
+        "sample_rate_option_96000": "96 000 Hz",
+        "conflict_dialog_title": "文件已存在",
+        "conflict_dialog_message": "输出文件夹中已存在 {name}。",
+        "conflict_btn_overwrite": "覆盖",
+        "conflict_btn_skip": "跳过",
+        "conflict_btn_rename": "重命名",
+        "conflict_apply_all": "应用于所有剩余文件",
+        "tooltip_output_dir": "转换后的 .ogg 文件将保存到此文件夹。",
+        "tooltip_quality": (
+            "OGG 压缩级别。低 - 语音和简单音效，文件更小。"
+            "中 - 均衡默认。高 - 音乐，文件更大。"
+        ),
+        "tooltip_channels": (
+            "输出文件的声道数。"
+            "保持源文件、强制单声道或立体声。"
+        ),
+        "tooltip_sample_rate": (
+            "输出采样率（Hz）。值越低，音质越低，文件也越小。"
+            "44 100 Hz 为 CD 音质。"
+        ),
+        "tooltip_add_files": "向列表添加音频文件（Ctrl+O）。",
+        "tooltip_remove_selected": "从列表中删除所选文件（Delete）。",
+        "tooltip_clear_list": "清空整个文件列表（Ctrl+L）。",
+        "tooltip_convert": "开始将所有文件转换为 OGG（Ctrl+Enter）。",
+        "tooltip_language": "界面语言。选择会在下次启动时记住。",
+        "tooltip_changelog": "查看版本历史和更新说明。",
         "choose_button": "选择...",
-        "drop_frame_title": "将音频文件拖放到此处",
+        "drop_frame_title": "将音频文件或文件夹拖放到此处",
+        "list_summary_empty": "无文件",
+        "list_duration_pending": "...",
         "add_files_button": "添加文件",
         "remove_selected_button": "删除所选",
         "clear_list_button": "清空列表",
@@ -177,7 +346,9 @@ TRANSLATIONS: dict[str, dict] = {
         "log_ok": "成功：{name}",
         "log_error_unknown": "未知的 ffmpeg 错误。",
         "log_error": "错误：{name} | {err}",
+        "log_skipped_exists": "已跳过（文件已存在）：{name}",
         "log_done": "完成。成功：{ok}，失败：{failed}",
+        "log_done_skipped": "，跳过：{skipped}",
         "language_switched": "语言已切换为中文。",
         "help_shortcuts_title": "快捷键",
         "help_shortcuts": [

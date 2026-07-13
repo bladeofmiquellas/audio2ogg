@@ -27,7 +27,7 @@ Shortcuts work on any keyboard layout.
 
 ## Building
 
-Requires Python 3.10+, PowerShell. Double-click `build.cmd` — the script handles everything automatically (Python install, ffmpeg download, icon generation, packaging).
+Requires Python 3.10+, PowerShell. Double-click `build.cmd` - the script handles everything automatically (Python install, ffmpeg download, icon generation, packaging).
 
 Output: `build\audio2ogg.exe`
 

@@ -8,6 +8,17 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $vendorDir = Join-Path $projectRoot "vendor"
 $cacheDir = Join-Path $projectRoot ".cache"
 $ffmpegExe = Join-Path $vendorDir "ffmpeg.exe"
+$ffprobeExe = Join-Path $vendorDir "ffprobe.exe"
+
+function Copy-FfprobeSibling {
+    param([string]$FfmpegSourcePath)
+
+    $ffprobeSource = Join-Path (Split-Path $FfmpegSourcePath -Parent) "ffprobe.exe"
+    if (Test-Path $ffprobeSource) {
+        Copy-Item -Path $ffprobeSource -Destination $ffprobeExe -Force
+        Write-Host "ffprobe embedded binary prepared at: $ffprobeExe"
+    }
+}
 
 function Test-PythonLauncher {
     param([string]$Launcher)
@@ -87,6 +98,7 @@ else {
     if ($ffmpegCmd -and $ffmpegCmd.Source -and (Test-Path $ffmpegCmd.Source)) {
         Copy-Item -Path $ffmpegCmd.Source -Destination $ffmpegExe -Force
         Write-Host "Found ffmpeg in PATH and embedded it: $($ffmpegCmd.Source)"
+        Copy-FfprobeSibling -FfmpegSourcePath $ffmpegCmd.Source
     }
 }
 
@@ -114,6 +126,14 @@ if (-not (Test-Path $ffmpegExe)) {
 
     Copy-Item -Path $downloadedFfmpeg.FullName -Destination $ffmpegExe -Force
     Write-Host "ffmpeg embedded binary prepared at: $ffmpegExe"
+
+    $downloadedFfprobe = Get-ChildItem -Path $extractDir -Recurse -Filter "ffprobe.exe" |
+        Where-Object { $_.FullName -match "\\bin\\ffprobe.exe$" } |
+        Select-Object -First 1
+    if ($downloadedFfprobe) {
+        Copy-Item -Path $downloadedFfprobe.FullName -Destination $ffprobeExe -Force
+        Write-Host "ffprobe embedded binary prepared at: $ffprobeExe"
+    }
 }
 
 if (-not (Test-Path $ffmpegExe)) {
@@ -143,6 +163,11 @@ frames[0].save(r'$icoPath', format='ICO', append_images=frames[1:])
         Write-Host "Icon ready."
     }
 
+    $addFfprobe = @()
+    if (Test-Path $ffprobeExe) {
+        $addFfprobe = @("--add-binary", "vendor/ffprobe.exe;ffmpeg")
+    }
+
     & $PythonExe -m PyInstaller `
         --noconfirm `
         --clean `
@@ -152,6 +177,7 @@ frames[0].save(r'$icoPath', format='ICO', append_images=frames[1:])
         --distpath "build" `
         --workpath "_tmp" `
         --add-binary "vendor/ffmpeg.exe;ffmpeg" `
+        @addFfprobe `
         --add-data "changelog.json;." `
         @addIconData `
         @iconArg `
