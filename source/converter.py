@@ -3,13 +3,25 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .constants import AUDIO_EXTENSIONS
+from .constants import AUDIO_EXTENSIONS, QUALITY_BITRATE_BPS
 
 ConflictResolver = Callable[[Path, Path], str]
+
+
+def format_byte_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{size / (1024 * 1024 * 1024):.2f} GB"
 
 
 @dataclass(frozen=True)
@@ -28,6 +40,14 @@ def resolve_ffprobe_path(ffmpeg_path: Path | None = None) -> Path | None:
     if ffmpeg_path is not None:
         candidates.append(ffmpeg_path.parent / "ffprobe.exe")
     candidates.extend(_tool_search_paths("ffprobe.exe"))
+    return _first_existing(candidates)
+
+
+def resolve_ffplay_path(ffmpeg_path: Path | None = None) -> Path | None:
+    candidates: list[Path] = []
+    if ffmpeg_path is not None:
+        candidates.append(ffmpeg_path.parent / "ffplay.exe")
+    candidates.extend(_tool_search_paths("ffplay.exe"))
     return _first_existing(candidates)
 
 
@@ -198,6 +218,79 @@ def build_ffmpeg_cmd(
     return cmd
 
 
+def _estimate_output_channels(options: ConversionOptions, source_channels: int = 2) -> int:
+    if options.channels == "original":
+        return max(1, source_channels)
+    return int(options.channels)
+
+
+def estimate_output_bytes(
+    duration: float | None,
+    source_size: int,
+    options: ConversionOptions,
+    *,
+    source_channels: int = 2,
+) -> int:
+    if duration and duration > 0:
+        base_bps = QUALITY_BITRATE_BPS.get(options.quality, 160_000)
+        out_channels = _estimate_output_channels(options, source_channels)
+        out_rate = int(options.sample_rate)
+        effective_bps = base_bps * (out_channels / 2) * (out_rate / 48_000)
+        return max(1, int(duration * effective_bps / 8))
+
+    if source_size > 0:
+        fallback_ratio = {3: 0.35, 5: 0.5, 7: 0.7}.get(options.quality, 0.5)
+        return max(1, int(source_size * fallback_ratio))
+
+    return 0
+
+
+def estimate_conversion_sizes(
+    files: list[Path],
+    durations: dict[Path, float],
+    options: ConversionOptions,
+) -> tuple[int, int]:
+    input_bytes = 0
+    output_bytes = 0
+
+    for path in files:
+        try:
+            source_size = path.stat().st_size
+        except OSError:
+            continue
+        input_bytes += source_size
+        duration = durations.get(path.resolve())
+        output_bytes += estimate_output_bytes(duration, source_size, options)
+
+    return input_bytes, output_bytes
+
+
+def _run_ffmpeg(
+    cmd: list[str],
+    cancel_event: threading.Event | None,
+    extra: dict,
+) -> subprocess.CompletedProcess[str] | None:
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **extra,
+    )
+    while proc.poll() is None:
+        if cancel_event and cancel_event.is_set():
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            return None
+        time.sleep(0.1)
+    stdout, stderr = proc.communicate()
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def run_conversion(
     ffmpeg_path: Path,
     files: list[Path],
@@ -206,13 +299,19 @@ def run_conversion(
     result_queue: "queue.Queue[str]",
     t: "callable",
     conflict_resolver: ConflictResolver | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     ok = 0
     failed = 0
     skipped = 0
+    input_bytes = 0
+    output_bytes = 0
     total = len(files)
 
     for idx, src in enumerate(files, 1):
+        if cancel_event and cancel_event.is_set():
+            break
+
         result_queue.put(f"PROGRESS::{idx - 1}::{total}::{src.name}")
 
         target = output_target_path(src, out_dir)
@@ -225,21 +324,35 @@ def run_conversion(
         if dst is None:
             skipped += 1
             result_queue.put(t("log_skipped_exists", name=src.name))
+            result_queue.put(f"PROGRESS::{idx}::{total}::{src.name}")
             continue
 
         cmd = build_ffmpeg_cmd(ffmpeg_path, src, dst, options)
 
         result_queue.put(t("log_converting", src=src.name, dst=dst.name))
         extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
-        proc = subprocess.run(cmd, capture_output=True, text=True, **extra)
+        proc = _run_ffmpeg(cmd, cancel_event, extra)
+
+        if proc is None:
+            break
 
         if proc.returncode == 0:
             ok += 1
             result_queue.put(t("log_ok", name=dst.name))
+            try:
+                input_bytes += src.stat().st_size
+                output_bytes += dst.stat().st_size
+            except OSError:
+                pass
         else:
             failed += 1
             err = (proc.stderr or proc.stdout or "").strip()
             short_err = err[-240:] if err else t("log_error_unknown")
             result_queue.put(t("log_error", name=src.name, err=short_err))
 
-    result_queue.put(f"DONE::{ok}::{failed}::{skipped}")
+        result_queue.put(f"PROGRESS::{idx}::{total}::{src.name}")
+
+    if cancel_event and cancel_event.is_set():
+        result_queue.put(f"CANCELLED::{ok}::{failed}::{skipped}::{input_bytes}::{output_bytes}")
+    else:
+        result_queue.put(f"DONE::{ok}::{failed}::{skipped}::{input_bytes}::{output_bytes}")

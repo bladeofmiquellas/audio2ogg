@@ -1,4 +1,5 @@
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import ttk
 
@@ -8,6 +9,7 @@ class FileListPanel(tk.Frame):
     BG_EVEN = "#ffffff"
     BG_ODD = "#f6f7f9"
     BG_SELECTED = "#e8f1ff"
+    BG_PLAYING = "#dff5e8"
     FG_NAME = "#1f2937"
     FG_DURATION = "#6b7280"
     FG_PENDING = "#9ca3af"
@@ -23,6 +25,12 @@ class FileListPanel(tk.Frame):
         self._display_name = lambda path: path.name
         self._format_duration = lambda _seconds: ""
         self._pending_label = "..."
+        self._playing_path: Path | None = None
+        self._activate_handler: Callable[[Path], None] | None = None
+        self._selection_handler: Callable[[], None] | None = None
+        self._canvas_resize_after: str | None = None
+        self._scrollregion_after: str | None = None
+        self._pending_canvas_width = 0
 
         self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, background=self.BG_EVEN)
         self.scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
@@ -49,6 +57,43 @@ class FileListPanel(tk.Frame):
         self._format_duration = format_duration
         self._pending_label = pending_label
 
+    def apply_theme(
+        self,
+        *,
+        bg_even: str,
+        bg_odd: str,
+        bg_selected: str,
+        bg_playing: str,
+        fg_name: str,
+        fg_duration: str,
+        fg_pending: str,
+        sep_color: str,
+    ) -> None:
+        self.BG_EVEN = bg_even
+        self.BG_ODD = bg_odd
+        self.BG_SELECTED = bg_selected
+        self.BG_PLAYING = bg_playing
+        self.FG_NAME = fg_name
+        self.FG_DURATION = fg_duration
+        self.FG_PENDING = fg_pending
+        self.SEP_COLOR = sep_color
+        self.canvas.configure(background=self.BG_EVEN)
+        self.inner.configure(background=self.BG_EVEN)
+        if self._paths:
+            self._rebuild_rows()
+        else:
+            self._update_row_styles()
+
+    def set_activate_handler(self, handler: Callable[[Path], None] | None) -> None:
+        self._activate_handler = handler
+
+    def set_selection_handler(self, handler: Callable[[], None] | None) -> None:
+        self._selection_handler = handler
+
+    def set_playing_path(self, path: Path | None) -> None:
+        self._playing_path = path.resolve() if path is not None else None
+        self._update_row_styles()
+
     def set_items(
         self,
         paths: list[Path],
@@ -74,19 +119,40 @@ class FileListPanel(tk.Frame):
     def select_all(self) -> None:
         self._selected = {path.resolve() for path in self._paths}
         self._update_row_styles()
+        self._notify_selection_changed()
 
     def clear_selection(self) -> None:
         self._selected.clear()
         self._update_row_styles()
+        self._notify_selection_changed()
+
+    def _notify_selection_changed(self) -> None:
+        if self._selection_handler is not None:
+            self._selection_handler()
 
     def dnd_widget(self) -> tk.Misc:
         return self.canvas
 
     def _on_inner_configure(self, _event: tk.Event) -> None:
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        if self._scrollregion_after is None:
+            self._scrollregion_after = self.after(16, self._update_scrollregion)
+
+    def _update_scrollregion(self) -> None:
+        self._scrollregion_after = None
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=bbox)
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
-        self.canvas.itemconfigure(self._canvas_window, width=event.width)
+        if event.width <= 1:
+            return
+        self._pending_canvas_width = event.width
+        if self._canvas_resize_after is None:
+            self._canvas_resize_after = self.after(16, self._apply_canvas_width)
+
+    def _apply_canvas_width(self) -> None:
+        self._canvas_resize_after = None
+        self.canvas.itemconfigure(self._canvas_window, width=self._pending_canvas_width)
 
     def _bind_mousewheel(self, _event: tk.Event) -> None:
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
@@ -109,7 +175,10 @@ class FileListPanel(tk.Frame):
         return ""
 
     def _row_background(self, index: int, path: Path) -> str:
-        if self._resolved(path) in self._selected:
+        resolved = self._resolved(path)
+        if self._playing_path is not None and resolved == self._playing_path:
+            return self.BG_PLAYING
+        if resolved in self._selected:
             return self.BG_SELECTED
         return self.BG_ODD if index % 2 else self.BG_EVEN
 
@@ -154,6 +223,13 @@ class FileListPanel(tk.Frame):
 
             for widget in (row, content, name_lbl, duration_lbl):
                 widget.bind("<Button-1>", lambda e, p=path, i=index: self._on_row_click(e, p, i))
+                widget.bind("<Double-Button-1>", lambda e, p=path: self._on_row_double_click(e, p))
+
+    def _on_row_double_click(self, event: tk.Event, path: Path) -> None:
+        if event.state & 0x0004 or event.state & 0x0001:
+            return
+        if self._activate_handler is not None:
+            self._activate_handler(path)
 
     def _on_row_click(self, event: tk.Event, path: Path, index: int) -> None:
         resolved = self._resolved(path)
@@ -170,6 +246,7 @@ class FileListPanel(tk.Frame):
             self._selected = {resolved}
         self._last_index = index
         self._update_row_styles()
+        self._notify_selection_changed()
 
     def _update_row_styles(self) -> None:
         for index, path in enumerate(self._paths):

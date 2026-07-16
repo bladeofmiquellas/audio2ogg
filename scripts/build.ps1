@@ -9,14 +9,21 @@ $vendorDir = Join-Path $projectRoot "vendor"
 $cacheDir = Join-Path $projectRoot ".cache"
 $ffmpegExe = Join-Path $vendorDir "ffmpeg.exe"
 $ffprobeExe = Join-Path $vendorDir "ffprobe.exe"
+$ffplayExe = Join-Path $vendorDir "ffplay.exe"
 
-function Copy-FfprobeSibling {
+function Copy-FfmpegSiblings {
     param([string]$FfmpegSourcePath)
 
-    $ffprobeSource = Join-Path (Split-Path $FfmpegSourcePath -Parent) "ffprobe.exe"
+    $binDir = Split-Path $FfmpegSourcePath -Parent
+    $ffprobeSource = Join-Path $binDir "ffprobe.exe"
     if (Test-Path $ffprobeSource) {
         Copy-Item -Path $ffprobeSource -Destination $ffprobeExe -Force
         Write-Host "ffprobe embedded binary prepared at: $ffprobeExe"
+    }
+    $ffplaySource = Join-Path $binDir "ffplay.exe"
+    if (Test-Path $ffplaySource) {
+        Copy-Item -Path $ffplaySource -Destination $ffplayExe -Force
+        Write-Host "ffplay embedded binary prepared at: $ffplayExe"
     }
 }
 
@@ -98,7 +105,7 @@ else {
     if ($ffmpegCmd -and $ffmpegCmd.Source -and (Test-Path $ffmpegCmd.Source)) {
         Copy-Item -Path $ffmpegCmd.Source -Destination $ffmpegExe -Force
         Write-Host "Found ffmpeg in PATH and embedded it: $($ffmpegCmd.Source)"
-        Copy-FfprobeSibling -FfmpegSourcePath $ffmpegCmd.Source
+        Copy-FfmpegSiblings -FfmpegSourcePath $ffmpegCmd.Source
     }
 }
 
@@ -134,6 +141,13 @@ if (-not (Test-Path $ffmpegExe)) {
         Copy-Item -Path $downloadedFfprobe.FullName -Destination $ffprobeExe -Force
         Write-Host "ffprobe embedded binary prepared at: $ffprobeExe"
     }
+    $downloadedFfplay = Get-ChildItem -Path $extractDir -Recurse -Filter "ffplay.exe" |
+        Where-Object { $_.FullName -match "\\bin\\ffplay.exe$" } |
+        Select-Object -First 1
+    if ($downloadedFfplay) {
+        Copy-Item -Path $downloadedFfplay.FullName -Destination $ffplayExe -Force
+        Write-Host "ffplay embedded binary prepared at: $ffplayExe"
+    }
 }
 
 if (-not (Test-Path $ffmpegExe)) {
@@ -165,7 +179,10 @@ frames[0].save(r'$icoPath', format='ICO', append_images=frames[1:])
 
     $addFfprobe = @()
     if (Test-Path $ffprobeExe) {
-        $addFfprobe = @("--add-binary", "vendor/ffprobe.exe;ffmpeg")
+        $addFfprobe += "--add-binary", "vendor/ffprobe.exe;ffmpeg"
+    }
+    if (Test-Path $ffplayExe) {
+        $addFfprobe += "--add-binary", "vendor/ffplay.exe;ffmpeg"
     }
 
     & $PythonExe -m PyInstaller `

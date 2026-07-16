@@ -5,6 +5,13 @@ _TIP_FG = "#333333"
 _TIP_BORDER = "#d4d4d4"
 
 
+def set_tooltip_theme(*, bg: str, fg: str, border: str) -> None:
+    global _TIP_BG, _TIP_FG, _TIP_BORDER
+    _TIP_BG = bg
+    _TIP_FG = fg
+    _TIP_BORDER = border
+
+
 def _build_tip_content(parent: tk.Misc, text: str) -> None:
     border = tk.Frame(parent, background=_TIP_BORDER, padx=1, pady=1)
     tk.Label(

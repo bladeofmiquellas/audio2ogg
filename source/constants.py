@@ -1,4 +1,4 @@
-__version__ = "0.2"
+__version__ = "0.3"
 
 
 AUDIO_EXTENSIONS = {
@@ -40,6 +40,13 @@ QUALITY_QA: dict[str, int] = {
     "high": 7,
 }
 
+# Nominal libvorbis bitrates (stereo, 48 kHz) used for pre-conversion size estimates.
+QUALITY_BITRATE_BPS: dict[int, int] = {
+    3: 112_000,
+    5: 160_000,
+    7: 224_000,
+}
+
 CHANNEL_CHOICES: list[tuple[str, str]] = [
     ("original", "channels_option_original"),
     ("1", "channels_option_mono"),
@@ -58,6 +65,36 @@ SAMPLE_RATE_CHOICES: list[tuple[str, str]] = [
     ("96000", "sample_rate_option_96000"),
 ]
 
+THEME_CHOICES: list[tuple[str, str]] = [
+    ("light", "theme_option_light"),
+    ("dark", "theme_option_dark"),
+]
+
+PRESET_CHOICES: list[tuple[str, str]] = [
+    ("custom", "preset_option_custom"),
+    ("sfx", "preset_option_sfx"),
+    ("ui", "preset_option_ui"),
+    ("music", "preset_option_music"),
+]
+
+PRESETS: dict[str, dict[str, str]] = {
+    "sfx": {
+        "quality": "low",
+        "channels": "1",
+        "sample_rate": "22050",
+    },
+    "ui": {
+        "quality": "low",
+        "channels": "1",
+        "sample_rate": "32000",
+    },
+    "music": {
+        "quality": "medium",
+        "channels": "2",
+        "sample_rate": "48000",
+    },
+}
+
 TRANSLATIONS: dict[str, dict] = {
     "en": {
         "window_title": "audio2ogg",
@@ -67,7 +104,15 @@ TRANSLATIONS: dict[str, dict] = {
         "tab_help": "Help",
         "settings_frame_title": "Application settings",
         "language_label": "Language:",
+        "theme_label": "Theme:",
+        "theme_option_light": "Light",
+        "theme_option_dark": "Dark",
         "output_dir_label": "Output folder:",
+        "preset_label": "Preset:",
+        "preset_option_custom": "Custom",
+        "preset_option_sfx": "SFX",
+        "preset_option_ui": "UI",
+        "preset_option_music": "Music",
         "quality_label": "Quality:",
         "quality_option_low": "Low",
         "quality_option_medium": "Medium",
@@ -93,6 +138,12 @@ TRANSLATIONS: dict[str, dict] = {
         "conflict_btn_rename": "Rename",
         "conflict_apply_all": "Apply to all remaining files",
         "tooltip_output_dir": "Folder where converted .ogg files are saved.",
+        "tooltip_open_output_dir": "Open the output folder in Explorer.",
+        "tooltip_preset": (
+            "Game audio presets. SFX - short effects, mono, 22 kHz. "
+            "UI - interface sounds, mono, 32 kHz. Music - stereo, 48 kHz. "
+            "Custom - your manual settings."
+        ),
         "tooltip_quality": (
             "OGG compression level. Low - speech and simple sounds, smaller files. "
             "Medium - balanced default. High - music, larger files."
@@ -108,19 +159,31 @@ TRANSLATIONS: dict[str, dict] = {
         "tooltip_add_files": "Add audio files to the list (Ctrl+O).",
         "tooltip_remove_selected": "Remove selected files from the list (Delete).",
         "tooltip_clear_list": "Remove all files from the list (Ctrl+L).",
+        "tooltip_play": "Play the selected file (Space). Double-click a file to play.",
+        "tooltip_stop": "Stop playback (Space or Escape).",
         "tooltip_convert": "Start converting all listed files to OGG (Ctrl+Enter).",
+        "tooltip_cancel": "Stop the current conversion.",
         "tooltip_language": "Interface language. The choice is remembered on next launch.",
+        "tooltip_theme": "Application color theme. The choice is remembered on next launch.",
         "tooltip_changelog": "View version history and release notes.",
         "choose_button": "Choose...",
         "drop_frame_title": "Drag and drop audio files or folders here",
         "list_summary_empty": "No files",
+        "list_summary_size_estimate": "{before} → ~{after}",
         "list_duration_pending": "...",
         "add_files_button": "Add files",
         "remove_selected_button": "Remove selected",
         "clear_list_button": "Clear list",
+        "play_button": "Play",
+        "stop_button": "Stop",
         "convert_button": "Convert to OGG",
+        "cancel_button": "Cancel",
         "ffmpeg_found": "ffmpeg found: {path}",
         "ffmpeg_missing_log": "ffmpeg not found (neither bundled nor in PATH).",
+        "ffplay_missing_log": "ffplay not found. Playback is unavailable.",
+        "ffplay_fallback_log": "ffplay not found. Preview uses ffmpeg.",
+        "ffplay_not_found_short": "ffplay not found (neither bundled nor in PATH).",
+        "playback_unavailable_short": "Playback is unavailable. ffmpeg was not found.",
         "ffmpeg_missing_title": "ffmpeg not found",
         "ffmpeg_missing_message": (
             "Could not find ffmpeg executable.\n\n"
@@ -133,6 +196,11 @@ TRANSLATIONS: dict[str, dict] = {
         "log_skipped_items": "Skipped items: {count}",
         "log_removed_files": "Removed files: {count}",
         "log_list_cleared": "List cleared.",
+        "log_playing": "Playing: {name}",
+        "log_playback_stopped": "Playback stopped.",
+        "log_play_error": "Could not play: {name}",
+        "play_no_selection_title": "No file selected",
+        "play_no_selection_message": "Select a file in the list to play it.",
         "no_files_title": "No files",
         "no_files_message": "Add files before conversion.",
         "error_title": "Error",
@@ -145,7 +213,10 @@ TRANSLATIONS: dict[str, dict] = {
         "log_skipped_exists": "Skipped (already exists): {name}",
         "log_done": "Done. Successful: {ok}, failed: {failed}",
         "log_done_skipped": ", skipped: {skipped}",
+        "log_cancelling": "Cancelling conversion...",
+        "log_cancelled": "Conversion cancelled. Successful: {ok}, failed: {failed}",
         "language_switched": "Language switched to English.",
+        "theme_switched": "Theme switched to {theme}.",
         "help_shortcuts_title": "Keyboard shortcuts",
         "help_shortcuts": [
             ("Ctrl+O",     "Add files"),
@@ -154,10 +225,17 @@ TRANSLATIONS: dict[str, dict] = {
             ("Escape",     "Deselect all"),
             ("Ctrl+Enter", "Start conversion"),
             ("Ctrl+L",     "Clear list"),
+            ("Space",      "Play / stop selected file"),
+            ("Double-click", "Play file"),
         ],
         "help_note": "Shortcuts work regardless of keyboard layout.",
         "open_folder_button": "Open folder",
+        "open_folder_failed": "Could not open folder:\n{path}",
         "done_title": "Conversion complete",
+        "done_size_summary": "Total size: {before} → {after} ({change})",
+        "done_size_saved": "saved {percent}%",
+        "done_size_grew": "larger by {percent}%",
+        "done_size_same": "no size change",
         "changelog_title": "Changelog",
         "changelog_button": "Changelog",
     },
@@ -169,7 +247,15 @@ TRANSLATIONS: dict[str, dict] = {
         "tab_help": "Справка",
         "settings_frame_title": "Настройки приложения",
         "language_label": "Язык:",
+        "theme_label": "Тема:",
+        "theme_option_light": "Светлая",
+        "theme_option_dark": "Тёмная",
         "output_dir_label": "Папка экспорта:",
+        "preset_label": "Пресет:",
+        "preset_option_custom": "Свой",
+        "preset_option_sfx": "SFX",
+        "preset_option_ui": "UI",
+        "preset_option_music": "Музыка",
         "quality_label": "Качество:",
         "quality_option_low": "Низкое",
         "quality_option_medium": "Среднее",
@@ -195,6 +281,12 @@ TRANSLATIONS: dict[str, dict] = {
         "conflict_btn_rename": "Переименовать",
         "conflict_apply_all": "Применить ко всем оставшимся",
         "tooltip_output_dir": "Папка, куда сохраняются сконвертированные .ogg файлы.",
+        "tooltip_open_output_dir": "Открыть папку с результатами в проводнике.",
+        "tooltip_preset": (
+            "Пресеты для игрового аудио. SFX - короткие эффекты, моно, 22 кГц. "
+            "UI - звуки интерфейса, моно, 32 кГц. Музыка - стерео, 48 кГц. "
+            "Свой - ваши ручные настройки."
+        ),
         "tooltip_quality": (
             "Уровень сжатия OGG. Низкое - речь и простые звуки, меньше файл. "
             "Среднее - универсальный вариант. Высокое - музыка, больше файл."
@@ -210,19 +302,31 @@ TRANSLATIONS: dict[str, dict] = {
         "tooltip_add_files": "Добавить аудиофайлы в список (Ctrl+O).",
         "tooltip_remove_selected": "Удалить выделенные файлы из списка (Delete).",
         "tooltip_clear_list": "Очистить весь список файлов (Ctrl+L).",
+        "tooltip_play": "Прослушать выбранный файл (Пробел). Двойной клик по файлу.",
+        "tooltip_stop": "Остановить воспроизведение (Пробел или Escape).",
         "tooltip_convert": "Запустить конвертацию всех файлов в OGG (Ctrl+Enter).",
+        "tooltip_cancel": "Остановить текущую конвертацию.",
         "tooltip_language": "Язык интерфейса. Выбор запоминается при следующем запуске.",
+        "tooltip_theme": "Цветовая тема приложения. Выбор запоминается при следующем запуске.",
         "tooltip_changelog": "История версий и список изменений.",
         "choose_button": "Выбрать...",
         "drop_frame_title": "Перетащите аудиофайлы или папку сюда",
         "list_summary_empty": "Нет файлов",
+        "list_summary_size_estimate": "{before} → ~{after}",
         "list_duration_pending": "...",
         "add_files_button": "Добавить файлы",
         "remove_selected_button": "Удалить выбранные",
         "clear_list_button": "Очистить список",
+        "play_button": "Слушать",
+        "stop_button": "Стоп",
         "convert_button": "Конвертировать в OGG",
+        "cancel_button": "Отмена",
         "ffmpeg_found": "ffmpeg найден: {path}",
         "ffmpeg_missing_log": "ffmpeg не найден (ни встроенный, ни в PATH).",
+        "ffplay_missing_log": "ffplay не найден. Прослушивание недоступно.",
+        "ffplay_fallback_log": "ffplay не найден. Прослушивание через ffmpeg.",
+        "ffplay_not_found_short": "ffplay не найден (ни встроенный, ни в PATH).",
+        "playback_unavailable_short": "Прослушивание недоступно. ffmpeg не найден.",
         "ffmpeg_missing_title": "ffmpeg не найден",
         "ffmpeg_missing_message": (
             "Не найден исполняемый файл ffmpeg.\n\n"
@@ -235,6 +339,11 @@ TRANSLATIONS: dict[str, dict] = {
         "log_skipped_items": "Пропущено элементов: {count}",
         "log_removed_files": "Удалено файлов: {count}",
         "log_list_cleared": "Список очищен.",
+        "log_playing": "Воспроизведение: {name}",
+        "log_playback_stopped": "Воспроизведение остановлено.",
+        "log_play_error": "Не удалось воспроизвести: {name}",
+        "play_no_selection_title": "Файл не выбран",
+        "play_no_selection_message": "Выберите файл в списке для прослушивания.",
         "no_files_title": "Нет файлов",
         "no_files_message": "Сначала добавьте файлы для конвертации.",
         "error_title": "Ошибка",
@@ -247,7 +356,10 @@ TRANSLATIONS: dict[str, dict] = {
         "log_skipped_exists": "Пропущено (уже существует): {name}",
         "log_done": "Готово. Успешно: {ok}, с ошибками: {failed}",
         "log_done_skipped": ", пропущено: {skipped}",
+        "log_cancelling": "Отмена конвертации...",
+        "log_cancelled": "Конвертация отменена. Успешно: {ok}, с ошибками: {failed}",
         "language_switched": "Язык переключен на русский.",
+        "theme_switched": "Тема переключена: {theme}.",
         "help_shortcuts_title": "Горячие клавиши",
         "help_shortcuts": [
             ("Ctrl+O",     "Добавить файлы"),
@@ -256,10 +368,17 @@ TRANSLATIONS: dict[str, dict] = {
             ("Escape",     "Снять выделение"),
             ("Ctrl+Enter", "Запустить конвертацию"),
             ("Ctrl+L",     "Очистить список"),
+            ("Пробел",     "Слушать / остановить выбранный файл"),
+            ("Двойной клик", "Прослушать файл"),
         ],
         "help_note": "Горячие клавиши работают на любой раскладке.",
         "open_folder_button": "Открыть папку",
+        "open_folder_failed": "Не удалось открыть папку:\n{path}",
         "done_title": "Конвертация завершена",
+        "done_size_summary": "Общий размер: {before} → {after} ({change})",
+        "done_size_saved": "сжато на {percent}%",
+        "done_size_grew": "больше на {percent}%",
+        "done_size_same": "без изменения размера",
         "changelog_title": "История изменений",
         "changelog_button": "История изменений",
     },
@@ -271,7 +390,15 @@ TRANSLATIONS: dict[str, dict] = {
         "tab_help": "帮助",
         "settings_frame_title": "应用设置",
         "language_label": "语言：",
+        "theme_label": "主题：",
+        "theme_option_light": "浅色",
+        "theme_option_dark": "深色",
         "output_dir_label": "输出文件夹：",
+        "preset_label": "预设：",
+        "preset_option_custom": "自定义",
+        "preset_option_sfx": "音效",
+        "preset_option_ui": "界面",
+        "preset_option_music": "音乐",
         "quality_label": "质量：",
         "quality_option_low": "低",
         "quality_option_medium": "中",
@@ -297,6 +424,12 @@ TRANSLATIONS: dict[str, dict] = {
         "conflict_btn_rename": "重命名",
         "conflict_apply_all": "应用于所有剩余文件",
         "tooltip_output_dir": "转换后的 .ogg 文件将保存到此文件夹。",
+        "tooltip_open_output_dir": "在资源管理器中打开输出文件夹。",
+        "tooltip_preset": (
+            "游戏音频预设。音效 - 短效果音，单声道，22 kHz。"
+            "界面 - 界面音效，单声道，32 kHz。音乐 - 立体声，48 kHz。"
+            "自定义 - 手动设置的参数。"
+        ),
         "tooltip_quality": (
             "OGG 压缩级别。低 - 语音和简单音效，文件更小。"
             "中 - 均衡默认。高 - 音乐，文件更大。"
@@ -312,19 +445,31 @@ TRANSLATIONS: dict[str, dict] = {
         "tooltip_add_files": "向列表添加音频文件（Ctrl+O）。",
         "tooltip_remove_selected": "从列表中删除所选文件（Delete）。",
         "tooltip_clear_list": "清空整个文件列表（Ctrl+L）。",
+        "tooltip_play": "播放所选文件（空格）。双击文件也可播放。",
+        "tooltip_stop": "停止播放（空格或 Escape）。",
         "tooltip_convert": "开始将所有文件转换为 OGG（Ctrl+Enter）。",
+        "tooltip_cancel": "停止当前转换。",
         "tooltip_language": "界面语言。选择会在下次启动时记住。",
+        "tooltip_theme": "应用配色主题。选择会在下次启动时记住。",
         "tooltip_changelog": "查看版本历史和更新说明。",
         "choose_button": "选择...",
         "drop_frame_title": "将音频文件或文件夹拖放到此处",
         "list_summary_empty": "无文件",
+        "list_summary_size_estimate": "{before} → ~{after}",
         "list_duration_pending": "...",
         "add_files_button": "添加文件",
         "remove_selected_button": "删除所选",
         "clear_list_button": "清空列表",
+        "play_button": "播放",
+        "stop_button": "停止",
         "convert_button": "转换为 OGG",
+        "cancel_button": "取消",
         "ffmpeg_found": "已找到 ffmpeg：{path}",
         "ffmpeg_missing_log": "未找到 ffmpeg（既无内置版本，也不在 PATH 中）。",
+        "ffplay_missing_log": "未找到 ffplay，无法播放。",
+        "ffplay_fallback_log": "未找到 ffplay，将通过 ffmpeg 播放预览。",
+        "ffplay_not_found_short": "未找到 ffplay（既无内置版本，也不在 PATH 中）。",
+        "playback_unavailable_short": "无法播放，未找到 ffmpeg。",
         "ffmpeg_missing_title": "未找到 ffmpeg",
         "ffmpeg_missing_message": (
             "找不到 ffmpeg 可执行文件。\n\n"
@@ -337,6 +482,11 @@ TRANSLATIONS: dict[str, dict] = {
         "log_skipped_items": "已跳过项目：{count}",
         "log_removed_files": "已删除文件：{count}",
         "log_list_cleared": "列表已清空。",
+        "log_playing": "正在播放：{name}",
+        "log_playback_stopped": "播放已停止。",
+        "log_play_error": "无法播放：{name}",
+        "play_no_selection_title": "未选择文件",
+        "play_no_selection_message": "请先在列表中选择一个文件。",
         "no_files_title": "无文件",
         "no_files_message": "请先添加要转换的文件。",
         "error_title": "错误",
@@ -349,7 +499,10 @@ TRANSLATIONS: dict[str, dict] = {
         "log_skipped_exists": "已跳过（文件已存在）：{name}",
         "log_done": "完成。成功：{ok}，失败：{failed}",
         "log_done_skipped": "，跳过：{skipped}",
+        "log_cancelling": "正在取消转换...",
+        "log_cancelled": "转换已取消。成功：{ok}，失败：{failed}",
         "language_switched": "语言已切换为中文。",
+        "theme_switched": "主题已切换为 {theme}。",
         "help_shortcuts_title": "快捷键",
         "help_shortcuts": [
             ("Ctrl+O",     "添加文件"),
@@ -358,10 +511,17 @@ TRANSLATIONS: dict[str, dict] = {
             ("Escape",     "取消选择"),
             ("Ctrl+Enter", "开始转换"),
             ("Ctrl+L",     "清空列表"),
+            ("空格",        "播放 / 停止所选文件"),
+            ("双击",        "播放文件"),
         ],
         "help_note": "快捷键在任何键盘布局下均可使用。",
         "open_folder_button": "打开文件夹",
+        "open_folder_failed": "无法打开文件夹：\n{path}",
         "done_title": "转换完成",
+        "done_size_summary": "总大小：{before} → {after}（{change}）",
+        "done_size_saved": "节省 {percent}%",
+        "done_size_grew": "增大 {percent}%",
+        "done_size_same": "大小未变",
         "changelog_title": "更新日志",
         "changelog_button": "更新日志",
     },

@@ -2,23 +2,29 @@ import json
 import os
 from pathlib import Path
 
-from .constants import QUALITY_QA, SAMPLE_RATE_CHOICES
+from .constants import PRESETS, QUALITY_QA, SAMPLE_RATE_CHOICES
+from .theme import THEMES
 
 _SETTINGS_PATH = Path(os.environ.get("APPDATA", Path.home())) / "audio2ogg" / "settings.json"
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 8
 
 _DEFAULTS: dict = {
     "language": "en",
     "output_dir": "",
+    "preset": "custom",
     "quality": "medium",
     "channels": "original",
     "sample_rate": "48000",
+    "theme": "light",
 }
+
+_VALID_PRESETS = {"custom", *PRESETS}
 
 _VALID_QUALITY = set(QUALITY_QA)
 _VALID_CHANNELS = {"original", "1", "2"}
 _VALID_SAMPLE_RATES = {value for value, _ in SAMPLE_RATE_CHOICES}
+_VALID_THEMES = set(THEMES)
 
 
 def _int_to_quality(value: int) -> str:
@@ -34,12 +40,16 @@ def _validate(raw: dict) -> dict:
     result = {}
     for key, default in _DEFAULTS.items():
         value = raw.get(key)
-        if key == "quality":
+        if key == "preset":
+            result[key] = value if value in _VALID_PRESETS else default
+        elif key == "quality":
             result[key] = value if value in _VALID_QUALITY else default
         elif key == "channels":
             result[key] = value if value in _VALID_CHANNELS else default
         elif key == "sample_rate":
             result[key] = value if value in _VALID_SAMPLE_RATES else default
+        elif key == "theme":
+            result[key] = value if value in _VALID_THEMES else default
         elif value is not None and type(value) is type(default):
             result[key] = value
         else:
@@ -84,4 +94,8 @@ def _migrate(raw: dict, from_version: int) -> dict:
     if from_version < 4:
         if raw.get("sample_rate") == "original":
             raw["sample_rate"] = _DEFAULTS["sample_rate"]
+    if from_version < 7:
+        raw.setdefault("theme", _DEFAULTS["theme"])
+    if from_version < 8:
+        raw.setdefault("preset", _DEFAULTS["preset"])
     return raw

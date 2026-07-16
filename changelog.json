@@ -1,5 +1,58 @@
 [
   {
+    "version": "0.3",
+    "changes": {
+      "en": [
+        "Audio preview: play and stop files before conversion (ffplay, with ffmpeg + Windows fallback)",
+        "Play button with icons, double-click, Space, and Escape; playing track is highlighted in the list",
+        "Cancel conversion mid-batch; current ffmpeg process is stopped",
+        "Open output folder button with folder icon on the main screen",
+        "Estimated output size in the file list summary (source size → ~estimated)",
+        "Total size before and after conversion in the completion dialog",
+        "Dark theme: light or dark, saved between sessions",
+        "Game audio presets: SFX, UI, Music, and Custom",
+        "Preset switches to Custom when quality, channels, or sample rate are changed manually",
+        "Global Delete and Escape on the Converter tab (work even when a combobox has focus)",
+        "Version label pinned to the bottom of the window",
+        "Smoother window resize and DPI awareness on Windows",
+        "Space on a focused button now plays or stops instead of clicking the button",
+        "Dropdown selection highlight clears after choosing a preset or option"
+      ],
+      "ru": [
+        "Прослушивание файлов до конвертации: play/stop (ffplay, запасной вариант через ffmpeg + Windows)",
+        "Кнопка воспроизведения с иконками, двойной клик, Пробел и Escape; играющий трек подсвечивается в списке",
+        "Отмена конвертации на середине пакета; текущий процесс ffmpeg прерывается",
+        "Кнопка «Открыть папку» с иконкой папки на главном экране",
+        "Оценка итогового размера в сводке под списком (исходный → ~оценка)",
+        "Сравнение общего размера до и после конвертации в окне завершения",
+        "Тёмная тема: светлая или тёмная, сохраняется между запусками",
+        "Пресеты для игрового аудио: SFX, UI, Музыка и Свой",
+        "При ручной смене качества, каналов или частоты пресет переключается на Свой",
+        "Глобальные Delete и Escape на вкладке «Конвертер» (работают даже при фокусе на комбобоксе)",
+        "Метка версии закреплена внизу окна",
+        "Более плавное изменение размера окна и поддержка DPI в Windows",
+        "Пробел на сфокусированной кнопке теперь play/stop, а не нажатие кнопки",
+        "После выбора пресета или настройки текст в выпадающем списке больше не остаётся выделенным"
+      ],
+      "zh": [
+        "转换前音频预览：播放/停止（ffplay，备用 ffmpeg + Windows）",
+        "播放按钮带图标，支持双击、空格和 Escape；正在播放的文件在列表中高亮",
+        "批量转换中途可取消；会停止当前 ffmpeg 进程",
+        "主界面添加带文件夹图标的「打开文件夹」按钮",
+        "文件列表摘要显示预估输出大小（源大小 → ~预估）",
+        "完成对话框显示转换前后总大小对比",
+        "深色主题：浅色或深色，会话间保存",
+        "游戏音频预设：音效、界面、音乐和自定义",
+        "手动更改质量、声道或采样率时自动切换为自定义预设",
+        "转换器标签页全局 Delete 和 Escape（组合框有焦点时也有效）",
+        "版本号固定在窗口底部",
+        "更流畅的窗口缩放和 Windows DPI 感知",
+        "聚焦按钮时按空格键播放/停止，不再触发按钮点击",
+        "选择预设或选项后下拉框文本不再保持选中高亮"
+      ]
+    }
+  },
+  {
     "version": "0.2",
     "changes": {
       "en": [

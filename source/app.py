@@ -12,9 +12,12 @@ from .constants import (
     __version__,
     CHANNEL_CHOICES,
     LANGUAGE_OPTIONS,
+    PRESET_CHOICES,
+    PRESETS,
     QUALITY_CHOICES,
     QUALITY_QA,
     SAMPLE_RATE_CHOICES,
+    THEME_CHOICES,
     TRANSLATIONS,
 )
 from . import changelog
@@ -23,29 +26,39 @@ from .converter import (
     expand_input_paths,
     filter_audio_files,
     probe_audio_duration,
+    estimate_conversion_sizes,
     resolve_ffmpeg_path,
     resolve_ffprobe_path,
+    resolve_ffplay_path,
+    format_byte_size,
     run_conversion,
 )
 from .file_list import FileListPanel
+from .player import AudioPlayer
 from . import settings
-from .tooltip import ToolTip
+from .theme import AppTheme, apply_root_theme, apply_ttk_theme, get_theme
+from .tooltip import ToolTip, set_tooltip_theme
 
 
 class OggConverterApp(TkinterDnD.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.geometry("760x520")
-        self.minsize(700, 440)
+        self.minsize(700, 480)
 
         self.files: list[Path] = []
         self.log_queue: "queue.Queue[str]" = queue.Queue()
         self.is_converting = False
         self.ffmpeg_path = resolve_ffmpeg_path()
         self.ffprobe_path = resolve_ffprobe_path(self.ffmpeg_path)
+        self.ffplay_path = resolve_ffplay_path(self.ffmpeg_path)
+        self._player = AudioPlayer(self.ffmpeg_path, self.ffplay_path)
+        self._playback_poll_id: str | None = None
         self._file_durations: dict[Path, float] = {}
         self._probing_durations = False
         self._prefs = settings.load()
+        self._style = ttk.Style()
+        self._theme: AppTheme = get_theme("light")
 
         self.language = self._prefs.get("language", "en")
         lang_name = next((k for k, v in LANGUAGE_OPTIONS.items() if v == self.language), "English")
@@ -55,25 +68,45 @@ class OggConverterApp(TkinterDnD.Tk):
         self.output_dir = tk.StringVar(value=self._prefs.get("output_dir") or default_out)
         self.output_dir.trace_add("write", self._on_output_dir_changed)
 
+        preset = self._prefs.get("preset", "custom")
+        if preset not in PRESETS:
+            preset = "custom"
+        self.preset_var = tk.StringVar(value=preset)
         self.quality_var = tk.StringVar(value=self._prefs.get("quality", "medium"))
         self.channels_var = tk.StringVar(value=self._prefs.get("channels", "original"))
         self.sample_rate_var = tk.StringVar(value=self._prefs.get("sample_rate", "48000"))
+        if preset in PRESETS:
+            for key, value in PRESETS[preset].items():
+                if key == "quality":
+                    self.quality_var.set(value)
+                elif key == "channels":
+                    self.channels_var.set(value)
+                elif key == "sample_rate":
+                    self.sample_rate_var.set(value)
+        self.theme_var = tk.StringVar(value=self._prefs.get("theme", "light"))
+        self.preset_display_var = tk.StringVar()
         self.quality_display_var = tk.StringVar()
         self.channels_display_var = tk.StringVar()
         self.sample_rate_display_var = tk.StringVar()
+        self.theme_display_var = tk.StringVar()
+        self._applying_preset = False
 
         self._conflict_apply_all: str | None = None
         self._conflict_choice = "rename"
         self._conflict_event = threading.Event()
         self._conflict_src: Path | None = None
         self._conflict_target: Path | None = None
+        self._cancel_event = threading.Event()
 
         self._tooltips: dict[str, list[ToolTip]] = {}
+        self._ui_icon_refs: list[tk.PhotoImage] = []
 
         self._build_ui()
+        self._apply_theme()
         self._apply_language()
         self._set_icon()
         self._check_ffmpeg()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(120, self._drain_log_queue)
 
     # ── UI construction ────────────────────────────────────────────────────────
@@ -82,12 +115,14 @@ class OggConverterApp(TkinterDnD.Tk):
         root = ttk.Frame(self, padding=12)
         root.pack(fill=tk.BOTH, expand=True)
 
-        self.notebook = ttk.Notebook(root)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-
-        self.version_label = ttk.Label(root, text=f"v{__version__}", foreground="gray", font=("", 8), cursor="hand2")
-        self.version_label.pack(anchor=tk.SE, pady=(2, 0))
+        footer = ttk.Frame(root)
+        footer.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+        self.version_label = ttk.Label(footer, text=f"v{__version__}", font=("", 8), cursor="hand2")
+        self.version_label.pack(side=tk.RIGHT)
         self.version_label.bind("<Button-1>", lambda _e: self._show_changelog())
+
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self.converter_tab = ttk.Frame(self.notebook, padding=8)
         self.log_tab       = ttk.Frame(self.notebook, padding=8)
@@ -104,25 +139,62 @@ class OggConverterApp(TkinterDnD.Tk):
 
     def _register_tooltips(self) -> None:
         self._register_tooltip("tooltip_output_dir", self.choose_output_btn)
+        self._register_tooltip("tooltip_open_output_dir", self.open_output_btn)
+        self._register_tooltip("tooltip_preset", self.preset_combo)
         self._register_tooltip("tooltip_quality", self.quality_combo)
         self._register_tooltip("tooltip_channels", self.channels_combo)
         self._register_tooltip("tooltip_sample_rate", self.sample_rate_combo)
         self._register_tooltip("tooltip_add_files", self.add_files_btn)
         self._register_tooltip("tooltip_remove_selected", self.remove_selected_btn)
         self._register_tooltip("tooltip_clear_list", self.clear_list_btn)
+        self._register_tooltip("tooltip_play", self.play_btn)
         self._register_tooltip("tooltip_convert", self.convert_btn)
+        self._register_tooltip("tooltip_cancel", self.cancel_btn)
         self._register_tooltip("tooltip_language", self.language_combo)
+        self._register_tooltip("tooltip_theme", self.theme_combo)
         self._register_tooltip("tooltip_changelog", self.changelog_btn)
 
     def _build_converter_tab(self) -> None:
+        self._style.configure("Icon.TButton", padding=(4, 2))
+
+        self.progress_frame = ttk.Frame(self.converter_tab)
+        self.progress_label = ttk.Label(self.progress_frame, text="", font=("", 9))
+        self.progress_label.pack(anchor=tk.W, pady=(0, 4))
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate")
+        self.progress_bar.pack(fill=tk.X, ipady=1)
+
+        self.buttons_frame = ttk.Frame(self.converter_tab)
+        self.add_files_btn = ttk.Button(self.buttons_frame, command=self._add_files_dialog)
+        self.remove_selected_btn = ttk.Button(self.buttons_frame, command=self._remove_selected)
+        self.clear_list_btn = ttk.Button(self.buttons_frame, command=self._clear_list)
+        self._play_icon = self._create_play_icon()
+        self._stop_icon = self._create_stop_icon()
+        play_btn_kwargs: dict = {
+            "command": self._toggle_playback,
+            "style": "Icon.TButton",
+            "width": 2,
+        }
+        if self._play_icon is not None:
+            play_btn_kwargs["image"] = self._play_icon
+        else:
+            play_btn_kwargs["text"] = ">"
+        self.play_btn = ttk.Button(self.buttons_frame, **play_btn_kwargs)
+        self.convert_btn = ttk.Button(self.buttons_frame, command=self._start_conversion)
+        self.cancel_btn = ttk.Button(self.buttons_frame, command=self._cancel_conversion)
+
+        self.add_files_btn.pack(side=tk.LEFT)
+        self.remove_selected_btn.pack(side=tk.LEFT, padx=8)
+        self.clear_list_btn.pack(side=tk.LEFT)
+        self.play_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self.convert_btn.pack(side=tk.RIGHT)
+        self.buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+
         top_bar = ttk.Frame(self.converter_tab)
-        top_bar.pack(fill=tk.X, pady=(0, 10))
+        top_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
 
         self.output_label = ttk.Label(top_bar)
         self.output_label.pack(side=tk.LEFT)
 
-        style = ttk.Style()
-        style.configure("Readonly.TEntry", foreground="gray")
         self.output_entry = ttk.Entry(
             top_bar,
             textvariable=self.output_dir,
@@ -133,9 +205,32 @@ class OggConverterApp(TkinterDnD.Tk):
 
         self.choose_output_btn = ttk.Button(top_bar, command=self._pick_output_dir)
         self.choose_output_btn.pack(side=tk.LEFT)
+        folder_icon = self._load_folder_icon()
+        open_btn_kwargs: dict = {
+            "command": self._open_output_dir,
+            "style": "Icon.TButton",
+        }
+        if folder_icon is not None:
+            open_btn_kwargs["image"] = folder_icon
+            open_btn_kwargs["width"] = 2
+        else:
+            open_btn_kwargs["text"] = "..."
+        self.open_output_btn = ttk.Button(top_bar, **open_btn_kwargs)
+        self.open_output_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         opts_bar = ttk.Frame(self.converter_tab)
-        opts_bar.pack(fill=tk.X, pady=(0, 10))
+        opts_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        self.preset_label = ttk.Label(opts_bar)
+        self.preset_label.pack(side=tk.LEFT)
+        self.preset_combo = ttk.Combobox(
+            opts_bar,
+            textvariable=self.preset_display_var,
+            state="readonly",
+            width=12,
+        )
+        self.preset_combo.pack(side=tk.LEFT, padx=(8, 16))
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_changed)
 
         self.quality_label = ttk.Label(opts_bar)
         self.quality_label.pack(side=tk.LEFT)
@@ -171,48 +266,48 @@ class OggConverterApp(TkinterDnD.Tk):
         self.sample_rate_combo.bind("<<ComboboxSelected>>", self._on_sample_rate_changed)
 
         self.drop_frame = ttk.LabelFrame(self.converter_tab)
-        self.drop_frame.pack(fill=tk.BOTH, expand=True)
+        self.drop_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         list_wrap = ttk.Frame(self.drop_frame)
-        list_wrap.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
 
         self.file_list = FileListPanel(list_wrap)
         self.file_list.pack(fill=tk.BOTH, expand=True)
         self.file_list.dnd_widget().drop_target_register(DND_FILES)
         self.file_list.dnd_widget().dnd_bind("<<Drop>>", self._on_drop)
-        self.file_list.dnd_widget().bind("<Delete>", lambda _e: self._remove_selected())
-        self.file_list.bind("<Delete>", lambda _e: self._remove_selected())
-        self.file_list.bind("<Escape>", lambda _e: self.file_list.clear_selection())
+        self.file_list.set_activate_handler(self._toggle_playback)
+        self.file_list.set_selection_handler(self._update_play_controls)
 
-        self.list_summary_label = ttk.Label(self.drop_frame, foreground="gray", font=("", 9))
-        self.list_summary_label.pack(anchor=tk.W, padx=8, pady=(0, 8))
+        self.summary_frame = ttk.Frame(self.drop_frame, height=44)
+        self.summary_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(4, 8))
+        self.summary_frame.pack_propagate(False)
+        self.summary_frame.bind("<Configure>", self._on_summary_frame_configure)
+
+        self.list_summary_label = ttk.Label(
+            self.summary_frame,
+            font=("", 9),
+            anchor=tk.NW,
+            justify=tk.LEFT,
+        )
+        self.list_summary_label.pack(fill=tk.BOTH, expand=True, anchor=tk.W)
+
+        list_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
+
+        self._bind_converter_space_override(
+            self.choose_output_btn,
+            self.open_output_btn,
+            self.add_files_btn,
+            self.remove_selected_btn,
+            self.clear_list_btn,
+            self.play_btn,
+            self.convert_btn,
+            self.cancel_btn,
+        )
 
         self.bind("<Control-Return>", lambda _e: self._start_conversion())
         self.bind("<Control-KeyPress>", self._on_ctrl_key)
-
-        buttons = ttk.Frame(self.converter_tab)
-        buttons.pack(fill=tk.X, pady=10)
-
-        self.add_files_btn      = ttk.Button(buttons, command=self._add_files_dialog)
-        self.remove_selected_btn = ttk.Button(buttons, command=self._remove_selected)
-        self.clear_list_btn     = ttk.Button(buttons, command=self._clear_list)
-        self.convert_btn        = ttk.Button(buttons, command=self._start_conversion)
-
-        self.add_files_btn.pack(side=tk.LEFT)
-        self.remove_selected_btn.pack(side=tk.LEFT, padx=8)
-        self.clear_list_btn.pack(side=tk.LEFT)
-        self.convert_btn.pack(side=tk.RIGHT)
-
-        self.progress_frame = ttk.Frame(self.converter_tab)
-        self.progress_frame.pack(fill=tk.X, pady=(0, 4))
-
-        self.progress_label = ttk.Label(self.progress_frame, text="", foreground="gray", font=("", 8))
-        self.progress_label.pack(anchor=tk.W)
-
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate")
-        self.progress_bar.pack(fill=tk.X)
-
-        self.progress_frame.pack_forget()
+        self.bind_all("<Delete>", self._on_delete_key)
+        self.bind_all("<Escape>", self._on_escape_key)
+        self.bind_all("<KeyPress-space>", self._on_space_key)
 
     def _build_log_tab(self) -> None:
         self.log_text = tk.Text(self.log_tab, state=tk.DISABLED, wrap=tk.WORD)
@@ -238,25 +333,46 @@ class OggConverterApp(TkinterDnD.Tk):
         self.language_combo.pack(side=tk.LEFT, padx=(8, 0))
         self.language_combo.bind("<<ComboboxSelected>>", self._on_language_changed)
 
+        theme_row = ttk.Frame(settings_wrap)
+        theme_row.pack(fill=tk.X, pady=(12, 0))
+
+        self.theme_label = ttk.Label(theme_row)
+        self.theme_label.pack(side=tk.LEFT)
+
+        self.theme_combo = ttk.Combobox(
+            theme_row,
+            textvariable=self.theme_display_var,
+            state="readonly",
+            width=12,
+        )
+        self.theme_combo.pack(side=tk.LEFT, padx=(8, 0))
+        self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_changed)
+
         self.settings_frame = settings_wrap
 
     def _build_help_tab(self) -> None:
-        self.help_shortcuts_label = ttk.Label(self.help_tab, font=("", 10, "bold"))
-        self.help_shortcuts_label.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
+        help_wrap = ttk.Frame(self.help_tab)
+        help_wrap.pack(fill=tk.BOTH, expand=True, anchor=tk.NW)
+        help_wrap.bind("<Configure>", self._on_help_tab_configure)
+
+        self.help_shortcuts_label = ttk.Label(help_wrap, font=("", 10, "bold"))
+        self.help_shortcuts_label.pack(anchor=tk.W, pady=(0, 8))
 
         self._help_row_widgets: list[tuple[ttk.Label, ttk.Label]] = []
-        for i in range(6):
-            key_lbl  = ttk.Label(self.help_tab, font=("Consolas", 10, "bold"), foreground="#444")
-            desc_lbl = ttk.Label(self.help_tab, font=("", 10))
-            key_lbl.grid(row=i + 1, column=0, sticky=tk.W, padx=(0, 24), pady=2)
-            desc_lbl.grid(row=i + 1, column=1, sticky=tk.W, pady=2)
+        for _ in range(8):
+            row = ttk.Frame(help_wrap)
+            row.pack(fill=tk.X, anchor=tk.W, pady=2)
+            key_lbl = ttk.Label(row, font=("Consolas", 10, "bold"), width=14, anchor=tk.W)
+            key_lbl.pack(side=tk.LEFT, anchor=tk.W)
+            desc_lbl = ttk.Label(row, font=("", 10), anchor=tk.W, justify=tk.LEFT)
+            desc_lbl.pack(side=tk.LEFT, anchor=tk.W, fill=tk.X, expand=True, padx=(8, 0))
             self._help_row_widgets.append((key_lbl, desc_lbl))
 
-        self.help_note_label = ttk.Label(self.help_tab, font=("", 9), foreground="gray")
-        self.help_note_label.grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(16, 0))
+        self.help_note_label = ttk.Label(help_wrap, font=("", 9), justify=tk.LEFT)
+        self.help_note_label.pack(anchor=tk.W, pady=(16, 0))
 
-        self.changelog_btn = ttk.Button(self.help_tab, command=self._show_changelog)
-        self.changelog_btn.grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
+        self.changelog_btn = ttk.Button(help_wrap, command=self._show_changelog)
+        self.changelog_btn.pack(anchor=tk.W, pady=(12, 0))
 
     # ── Language ───────────────────────────────────────────────────────────────
 
@@ -273,23 +389,80 @@ class OggConverterApp(TkinterDnD.Tk):
         self._log(self._t("language_switched"))
         self._save_settings()
 
+    def _on_theme_changed(self, _event: tk.Event | None = None) -> None:
+        value = self._value_from_label(self.theme_display_var.get(), THEME_CHOICES)
+        if value == self.theme_var.get():
+            return
+        self.theme_var.set(value)
+        self._apply_theme()
+        self._log(self._t("theme_switched", theme=self._label_from_value(value, THEME_CHOICES)))
+        self._save_settings()
+
     def _on_output_dir_changed(self, *_) -> None:
         self._save_settings()
+
+    def _on_preset_changed(self, _event: tk.Event | None = None) -> None:
+        value = self._value_from_label(self.preset_display_var.get(), PRESET_CHOICES)
+        self.preset_var.set(value)
+        if value in PRESETS:
+            self._apply_preset(value)
+        self._release_combobox_focus(self.preset_combo)
+        self._save_settings()
+        self._update_list_summary()
+
+    def _apply_preset(self, preset_id: str) -> None:
+        preset = PRESETS.get(preset_id)
+        if preset is None:
+            return
+        self._applying_preset = True
+        try:
+            self.quality_var.set(preset["quality"])
+            self.channels_var.set(preset["channels"])
+            self.sample_rate_var.set(preset["sample_rate"])
+            self.quality_display_var.set(
+                self._label_from_value(preset["quality"], QUALITY_CHOICES)
+            )
+            self.channels_display_var.set(
+                self._label_from_value(preset["channels"], CHANNEL_CHOICES)
+            )
+            self.sample_rate_display_var.set(
+                self._label_from_value(preset["sample_rate"], SAMPLE_RATE_CHOICES)
+            )
+        finally:
+            self._applying_preset = False
+
+    def _switch_to_custom_preset(self) -> None:
+        if self.preset_var.get() == "custom":
+            return
+        self.preset_var.set("custom")
+        self.preset_display_var.set(self._label_from_value("custom", PRESET_CHOICES))
 
     def _on_quality_changed(self, _event: tk.Event | None = None) -> None:
         value = self._value_from_label(self.quality_display_var.get(), QUALITY_CHOICES)
         self.quality_var.set(value)
+        if not self._applying_preset:
+            self._switch_to_custom_preset()
+        self._release_combobox_focus(self.quality_combo)
         self._save_settings()
+        self._update_list_summary()
 
     def _on_channels_changed(self, _event: tk.Event | None = None) -> None:
         value = self._value_from_label(self.channels_display_var.get(), CHANNEL_CHOICES)
         self.channels_var.set(value)
+        if not self._applying_preset:
+            self._switch_to_custom_preset()
+        self._release_combobox_focus(self.channels_combo)
         self._save_settings()
+        self._update_list_summary()
 
     def _on_sample_rate_changed(self, _event: tk.Event | None = None) -> None:
         value = self._value_from_label(self.sample_rate_display_var.get(), SAMPLE_RATE_CHOICES)
         self.sample_rate_var.set(value)
+        if not self._applying_preset:
+            self._switch_to_custom_preset()
+        self._release_combobox_focus(self.sample_rate_combo)
         self._save_settings()
+        self._update_list_summary()
 
     def _label_from_value(self, value: str, choices: list[tuple[str, str]]) -> str:
         for item_value, key in choices:
@@ -319,11 +492,14 @@ class OggConverterApp(TkinterDnD.Tk):
     def _save_settings(self) -> None:
         self._prefs["language"] = self.language
         self._prefs["output_dir"] = self.output_dir.get()
+        preset = self.preset_var.get()
+        self._prefs["preset"] = preset if preset in PRESETS or preset == "custom" else "custom"
         self._prefs["quality"] = (
             self.quality_var.get() if self.quality_var.get() in QUALITY_QA else "medium"
         )
         self._prefs["channels"] = self.channels_var.get()
         self._prefs["sample_rate"] = self.sample_rate_var.get()
+        self._prefs["theme"] = self.theme_var.get() if self.theme_var.get() in {"light", "dark"} else "light"
         settings.save(self._prefs)
 
     def _register_tooltip(self, key: str, *widgets: tk.Misc) -> None:
@@ -343,7 +519,13 @@ class OggConverterApp(TkinterDnD.Tk):
         self.notebook.tab(3, text=self._t("tab_help"))
         self.settings_frame.configure(text=self._t("settings_frame_title"))
         self.language_label.configure(text=self._t("language_label"))
+        self.theme_label.configure(text=self._t("theme_label"))
+        self.theme_combo.configure(values=self._choice_labels(THEME_CHOICES))
+        self.theme_display_var.set(self._label_from_value(self.theme_var.get(), THEME_CHOICES))
         self.output_label.configure(text=self._t("output_dir_label"))
+        self.preset_label.configure(text=self._t("preset_label"))
+        self.preset_combo.configure(values=self._choice_labels(PRESET_CHOICES))
+        self.preset_display_var.set(self._label_from_value(self.preset_var.get(), PRESET_CHOICES))
         self.quality_label.configure(text=self._t("quality_label"))
         self.quality_combo.configure(values=self._choice_labels(QUALITY_CHOICES))
         self.quality_display_var.set(self._label_from_value(self.quality_var.get(), QUALITY_CHOICES))
@@ -358,7 +540,9 @@ class OggConverterApp(TkinterDnD.Tk):
         self.add_files_btn.configure(text=self._t("add_files_button"))
         self.remove_selected_btn.configure(text=self._t("remove_selected_button"))
         self.clear_list_btn.configure(text=self._t("clear_list_button"))
+        self._update_play_controls()
         self.convert_btn.configure(text=self._t("convert_button"))
+        self.cancel_btn.configure(text=self._t("cancel_button"))
         self.file_list.configure_presenters(
             display_name=self._display_name,
             format_duration=self._format_duration_compact,
@@ -376,16 +560,133 @@ class OggConverterApp(TkinterDnD.Tk):
         self._update_list_summary()
         self._update_tooltips()
 
+    def _apply_theme(self) -> None:
+        theme_name = self.theme_var.get()
+        self._theme = get_theme(theme_name)
+        apply_ttk_theme(self._style, self._theme)
+        self._style.configure("Horizontal.TProgressbar", thickness=14)
+        apply_root_theme(self, self._theme)
+
+        set_tooltip_theme(
+            bg=self._theme.tip_bg,
+            fg=self._theme.tip_fg,
+            border=self._theme.tip_border,
+        )
+
+        self.file_list.apply_theme(
+            bg_even=self._theme.list_bg_even,
+            bg_odd=self._theme.list_bg_odd,
+            bg_selected=self._theme.list_bg_selected,
+            bg_playing=self._theme.list_bg_playing,
+            fg_name=self._theme.list_fg_name,
+            fg_duration=self._theme.list_fg_duration,
+            fg_pending=self._theme.list_fg_pending,
+            sep_color=self._theme.list_sep,
+        )
+
+        self.log_text.configure(
+            background=self._theme.log_bg,
+            foreground=self._theme.log_fg,
+            insertbackground=self._theme.log_fg,
+            selectbackground=self._theme.select_bg,
+            selectforeground=self._theme.fg,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+
+        for label in (
+            self.version_label,
+            self.progress_label,
+            self.list_summary_label,
+            self.help_note_label,
+        ):
+            label.configure(foreground=self._theme.muted)
+
+        for key_lbl, _desc_lbl in self._help_row_widgets:
+            key_lbl.configure(foreground=self._theme.help_key_fg)
+
     # ── Icon ───────────────────────────────────────────────────────────────────
 
-    def _set_icon(self) -> None:
+    def _asset_dirs(self) -> list[Path]:
         meipass = getattr(sys, "_MEIPASS", None)
-        base_dirs = []
+        dirs: list[Path] = []
         if meipass:
-            base_dirs.append(Path(meipass) / "assets")
-        base_dirs.append(Path(__file__).resolve().parent.parent / "assets")
+            dirs.append(Path(meipass) / "assets")
+        dirs.append(Path(__file__).resolve().parent.parent / "assets")
+        return dirs
 
-        for base in base_dirs:
+    def _load_folder_icon(self) -> tk.PhotoImage | None:
+        for base in self._asset_dirs():
+            png = base / "folder.png"
+            if not png.exists():
+                continue
+            try:
+                from PIL import Image, ImageTk
+                src = Image.open(str(png)).convert("RGBA")
+                ref = ImageTk.PhotoImage(src.resize((18, 18), Image.LANCZOS))
+                self._ui_icon_refs.append(ref)
+                return ref
+            except Exception:
+                continue
+        return self._create_folder_icon()
+
+    def _create_folder_icon(self) -> tk.PhotoImage | None:
+        try:
+            from PIL import Image, ImageDraw, ImageTk
+        except Exception:
+            return None
+
+        size = 18
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        tab_color = "#F5C451"
+        body_color = "#F0B429"
+        border = "#C8942A"
+        draw.rounded_rectangle([2, 6, 9, 9], radius=1, fill=tab_color, outline=border, width=1)
+        draw.rounded_rectangle([2, 8, 15, 15], radius=2, fill=body_color, outline=border, width=1)
+        try:
+            ref = ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+        self._ui_icon_refs.append(ref)
+        return ref
+
+    def _create_play_icon(self) -> tk.PhotoImage | None:
+        try:
+            from PIL import Image, ImageDraw, ImageTk
+        except Exception:
+            return None
+
+        size = 18
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.polygon([(6, 4), (6, 14), (15, 9)], fill="#22c55e")
+        try:
+            ref = ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+        self._ui_icon_refs.append(ref)
+        return ref
+
+    def _create_stop_icon(self) -> tk.PhotoImage | None:
+        try:
+            from PIL import Image, ImageDraw, ImageTk
+        except Exception:
+            return None
+
+        size = 18
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([5, 5, 13, 13], fill="#ef4444")
+        try:
+            ref = ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+        self._ui_icon_refs.append(ref)
+        return ref
+
+    def _set_icon(self) -> None:
+        for base in self._asset_dirs():
             png = base / "icon.png"
             if png.exists():
                 try:
@@ -469,20 +770,52 @@ class OggConverterApp(TkinterDnD.Tk):
             probing=self._probing_durations and bool(self.ffmpeg_path),
         )
 
+    def _on_summary_frame_configure(self, event: tk.Event) -> None:
+        wrap = max(event.width - 4, 120)
+        try:
+            self.list_summary_label.configure(wraplength=wrap)
+        except tk.TclError:
+            pass
+
+    def _on_help_tab_configure(self, event: tk.Event) -> None:
+        wrap = max(event.width - 140, 160)
+        try:
+            self.help_note_label.configure(wraplength=wrap)
+            for _key_lbl, desc_lbl in self._help_row_widgets:
+                desc_lbl.configure(wraplength=wrap)
+        except tk.TclError:
+            pass
+
     def _update_list_summary(self) -> None:
         count = len(self.files)
         if count == 0:
             self.list_summary_label.configure(text=self._t("list_summary_empty"))
             return
 
-        parts = [self._file_count_label(count)]
+        info_parts = [self._file_count_label(count)]
         known = [p for p in self.files if p.resolve() in self._file_durations]
         if len(known) == count:
             total_seconds = sum(self._file_durations[p.resolve()] for p in self.files)
             if total_seconds > 0:
-                parts.append(self._format_duration(total_seconds))
+                info_parts.append(self._format_duration(total_seconds))
 
-        self.list_summary_label.configure(text=", ".join(parts))
+        lines = [", ".join(info_parts)]
+
+        input_bytes, output_bytes = estimate_conversion_sizes(
+            self.files,
+            self._file_durations,
+            self._conversion_options(),
+        )
+        if input_bytes > 0 and output_bytes > 0:
+            lines.append(
+                self._t(
+                    "list_summary_size_estimate",
+                    before=format_byte_size(input_bytes),
+                    after=format_byte_size(output_bytes),
+                )
+            )
+
+        self.list_summary_label.configure(text="\n".join(lines))
 
     def _probe_durations_async(self, paths: list[Path]) -> None:
         if not self.ffmpeg_path or not paths:
@@ -520,10 +853,24 @@ class OggConverterApp(TkinterDnD.Tk):
         self._refresh_file_list()
         self._update_list_summary()
 
+    def _output_dir_path(self) -> Path:
+        return Path(self.output_dir.get().strip() or Path.cwd() / "converted")
+
     def _pick_output_dir(self) -> None:
         selected = filedialog.askdirectory(initialdir=self.output_dir.get() or str(Path.cwd()))
         if selected:
             self.output_dir.set(selected)
+
+    def _open_output_dir(self) -> None:
+        out_dir = self._output_dir_path()
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(out_dir))
+        except OSError:
+            messagebox.showerror(
+                self._t("error_title"),
+                self._t("open_folder_failed", path=str(out_dir)),
+            )
 
     def _add_files_dialog(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -562,6 +909,67 @@ class OggConverterApp(TkinterDnD.Tk):
             return "break"
         return None
 
+    def _on_converter_tab_active(self) -> bool:
+        try:
+            return self.notebook.index(self.notebook.select()) == 0
+        except tk.TclError:
+            return False
+
+    def _bind_converter_space_override(self, *buttons: ttk.Button) -> None:
+        def _on_button_space(_event: tk.Event) -> str | None:
+            if self.grab_current() is not None or self.is_converting or not self._on_converter_tab_active():
+                return None
+            self._toggle_playback()
+            return "break"
+
+        for button in buttons:
+            button.bind("<KeyPress-space>", _on_button_space)
+
+    def _release_combobox_focus(self, combo: ttk.Combobox) -> None:
+        def _clear() -> None:
+            try:
+                combo.selection_clear()
+            except tk.TclError:
+                pass
+            if self.focus_get() == combo:
+                self.focus_set()
+
+        self.after_idle(_clear)
+
+    def _on_delete_key(self, event: tk.Event) -> str | None:
+        if self.grab_current() is not None or self.is_converting or not self._on_converter_tab_active():
+            return None
+        focus = self.focus_get()
+        if isinstance(focus, tk.Text) and str(focus.cget("state")) == "normal":
+            return None
+        if not self.file_list.get_selected_paths():
+            return None
+        self._remove_selected()
+        return "break"
+
+    def _on_escape_key(self, event: tk.Event) -> str | None:
+        if self.grab_current() is not None or self.is_converting or not self._on_converter_tab_active():
+            return None
+        if self._player.is_playing():
+            self._stop_playback(log=True)
+            return "break"
+        if not self.file_list.get_selected_paths():
+            return None
+        self.file_list.clear_selection()
+        return "break"
+
+    def _on_space_key(self, event: tk.Event) -> str | None:
+        if self.grab_current() is not None or self.is_converting or not self._on_converter_tab_active():
+            return None
+        focus = self.focus_get()
+        if isinstance(focus, tk.Text) and str(focus.cget("state")) == "normal":
+            return None
+        widget_class = focus.winfo_class() if focus is not None else ""
+        if widget_class in {"TEntry", "TCombobox"}:
+            return None
+        self._toggle_playback()
+        return "break"
+
     def _select_all(self, _event: tk.Event = None) -> str:
         self.file_list.select_all()
         return "break"
@@ -570,6 +978,10 @@ class OggConverterApp(TkinterDnD.Tk):
         selected = self.file_list.get_selected_paths()
         if not selected:
             return
+        if self._player.is_playing() and any(
+            self._player.is_playing(path) for path in selected
+        ):
+            self._stop_playback(log=False)
         to_remove = {path.resolve() for path in selected}
         self.files = [path for path in self.files if path.resolve() not in to_remove]
         for resolved in to_remove:
@@ -580,6 +992,7 @@ class OggConverterApp(TkinterDnD.Tk):
 
     def _clear_list(self) -> None:
         if self.files:
+            self._stop_playback(log=False)
             self.files.clear()
             self._file_durations.clear()
             self._refresh_file_list()
@@ -591,9 +1004,108 @@ class OggConverterApp(TkinterDnD.Tk):
     def _check_ffmpeg(self) -> None:
         if self.ffmpeg_path:
             self._log(self._t("ffmpeg_found", path=self.ffmpeg_path))
+        else:
+            self._log(self._t("ffmpeg_missing_log"))
+            messagebox.showwarning(self._t("ffmpeg_missing_title"), self._t("ffmpeg_missing_message"))
+        if not self.ffplay_path:
+            if self._player.can_play:
+                self._log(self._t("ffplay_fallback_log"))
+            else:
+                self._log(self._t("ffplay_missing_log"))
+        self._update_play_controls()
+
+    def _playback_target(self, path: Path | None = None) -> Path | None:
+        if path is not None:
+            return path
+        selected = self.file_list.get_selected_paths()
+        if not selected:
+            return None
+        return selected[0]
+
+    def _stop_playback(self, *, log: bool) -> None:
+        if self._playback_poll_id is not None:
+            self.after_cancel(self._playback_poll_id)
+            self._playback_poll_id = None
+        was_playing = self._player.is_playing()
+        self._player.stop()
+        self.file_list.set_playing_path(None)
+        self._update_play_controls()
+        if log and was_playing:
+            self._log(self._t("log_playback_stopped"))
+
+    def _toggle_playback(self, path: Path | None = None) -> None:
+        if self.is_converting:
             return
-        self._log(self._t("ffmpeg_missing_log"))
-        messagebox.showwarning(self._t("ffmpeg_missing_title"), self._t("ffmpeg_missing_message"))
+        target = self._playback_target(path)
+        if self._player.is_playing():
+            current = self._player.current_path
+            if target is None or (
+                current is not None and target.resolve() == current.resolve()
+            ):
+                self._stop_playback(log=True)
+                return
+            self._stop_playback(log=False)
+        if not self._player.can_play:
+            messagebox.showerror(self._t("error_title"), self._t("playback_unavailable_short"))
+            return
+        if target is None:
+            messagebox.showinfo(self._t("play_no_selection_title"), self._t("play_no_selection_message"))
+            return
+        if not self._player.play(target):
+            messagebox.showerror(self._t("error_title"), self._t("log_play_error", name=target.name))
+            return
+        self.file_list.set_playing_path(target)
+        self._log(self._t("log_playing", name=target.name))
+        self._update_play_controls()
+        self._schedule_playback_poll()
+
+    def _schedule_playback_poll(self) -> None:
+        if self._playback_poll_id is not None:
+            self.after_cancel(self._playback_poll_id)
+        self._playback_poll_id = self.after(200, self._poll_playback)
+
+    def _poll_playback(self) -> None:
+        self._playback_poll_id = None
+        if self._player.is_playing():
+            self._schedule_playback_poll()
+            return
+        self.file_list.set_playing_path(None)
+        self._update_play_controls()
+
+    def _update_play_controls(self) -> None:
+        playing = self._player.is_playing()
+        can_start = self._player.can_play and bool(self.file_list.get_selected_paths())
+
+        if playing:
+            state = tk.NORMAL
+            tooltip_key = "tooltip_stop"
+            icon = self._stop_icon
+            fallback_text = self._t("stop_button")
+        elif can_start:
+            state = tk.NORMAL
+            tooltip_key = "tooltip_play"
+            icon = self._play_icon
+            fallback_text = self._t("play_button")
+        else:
+            state = tk.DISABLED
+            tooltip_key = "tooltip_play"
+            icon = self._play_icon
+            fallback_text = self._t("play_button")
+
+        try:
+            if icon is not None:
+                self.play_btn.configure(image=icon, text="", state=state)
+            else:
+                self.play_btn.configure(text=fallback_text, state=state)
+        except tk.TclError:
+            pass
+
+        for tip in self._tooltips.get("tooltip_play", []):
+            tip.set_text(self._t(tooltip_key))
+
+    def _on_close(self) -> None:
+        self._stop_playback(log=False)
+        self.destroy()
 
     def _start_conversion(self) -> None:
         if self.is_converting:
@@ -605,14 +1117,16 @@ class OggConverterApp(TkinterDnD.Tk):
             messagebox.showerror(self._t("error_title"), self._t("ffmpeg_not_found_short"))
             return
 
-        out_dir = Path(self.output_dir.get().strip() or Path.cwd() / "converted")
+        out_dir = self._output_dir_path()
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        self._stop_playback(log=False)
         self.is_converting = True
+        self._cancel_event.clear()
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(self.files)
         self.progress_label.configure(text="")
-        self.progress_frame.pack(fill=tk.X, pady=(0, 4))
+        self.progress_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 8), before=self.buttons_frame)
         self._log(self._t("log_start_conversion", count=len(self.files)))
         self._set_ui_locked(True)
         self._conflict_apply_all = None
@@ -627,11 +1141,23 @@ class OggConverterApp(TkinterDnD.Tk):
                 self.log_queue,
                 self._t,
                 self._resolve_conflict,
+                self._cancel_event,
             ),
             daemon=True,
         ).start()
 
+    def _cancel_conversion(self) -> None:
+        if not self.is_converting:
+            return
+        self._cancel_event.set()
+        self._conflict_choice = "skip"
+        self._conflict_event.set()
+        self.cancel_btn.configure(state=tk.DISABLED)
+        self._log(self._t("log_cancelling"))
+
     def _resolve_conflict(self, src: Path, target: Path) -> str:
+        if self._cancel_event.is_set():
+            return "skip"
         if self._conflict_apply_all:
             return self._conflict_apply_all
 
@@ -643,17 +1169,12 @@ class OggConverterApp(TkinterDnD.Tk):
         return self._conflict_choice
 
     def _release_busy(self) -> None:
-        try:
-            self.tk.call("tk", "busy", "forget", self)
-        except Exception:
-            pass
+        if self.is_converting:
+            self._set_ui_locked(False, swap_convert=False)
 
     def _restore_busy(self) -> None:
         if self.is_converting:
-            try:
-                self.tk.call("tk", "busy", "hold", self)
-            except Exception:
-                pass
+            self._set_ui_locked(True, swap_convert=False)
 
     def _show_conflict_dialog(self) -> None:
         target = self._conflict_target
@@ -724,6 +1245,35 @@ class OggConverterApp(TkinterDnD.Tk):
             message += self._t("log_done_skipped", skipped=skipped)
         return message
 
+    def _format_size_summary(self, input_bytes: int, output_bytes: int) -> str | None:
+        if input_bytes <= 0 or output_bytes <= 0:
+            return None
+        before = format_byte_size(input_bytes)
+        after = format_byte_size(output_bytes)
+        if output_bytes < input_bytes:
+            percent = round((1 - output_bytes / input_bytes) * 100)
+            change = self._t("done_size_saved", percent=percent)
+        elif output_bytes > input_bytes:
+            percent = round((output_bytes / input_bytes - 1) * 100)
+            change = self._t("done_size_grew", percent=percent)
+        else:
+            change = self._t("done_size_same")
+        return self._t("done_size_summary", before=before, after=after, change=change)
+
+    def _parse_conversion_result(self, parts: list[str]) -> tuple[int, int, int, int, int]:
+        ok = int(parts[1])
+        failed = int(parts[2])
+        skipped = int(parts[3]) if len(parts) > 3 else 0
+        input_bytes = int(parts[4]) if len(parts) > 4 else 0
+        output_bytes = int(parts[5]) if len(parts) > 5 else 0
+        return ok, failed, skipped, input_bytes, output_bytes
+
+    def _format_cancelled_message(self, ok: int, failed: int, skipped: int = 0) -> str:
+        message = self._t("log_cancelled", ok=ok, failed=failed)
+        if skipped:
+            message += self._t("log_done_skipped", skipped=skipped)
+        return message
+
     def _drain_log_queue(self) -> None:
         while True:
             try:
@@ -732,20 +1282,34 @@ class OggConverterApp(TkinterDnD.Tk):
                 break
             if message.startswith("PROGRESS::"):
                 _, current, total, name = message.split("::", 3)
-                self.progress_bar["value"] = int(current)
+                current_i = int(current)
+                total_i = int(total)
+                self.progress_bar["maximum"] = max(total_i, 1)
+                self.progress_bar["value"] = current_i
                 self.progress_label.configure(
-                    text=f"{name}  ({current}/{total})"
+                    text=f"{name}  ({current_i}/{total_i})"
                 )
             elif message.startswith("DONE::"):
                 parts = message.split("::")
-                ok, failed = int(parts[1]), int(parts[2])
-                skipped = int(parts[3]) if len(parts) > 3 else 0
+                ok, failed, skipped, input_bytes, output_bytes = self._parse_conversion_result(parts)
                 self._log(self._format_done_message(ok, failed, skipped))
-                self.is_converting = False
-                self.progress_frame.pack_forget()
-                self._set_ui_locked(False)
-                self._play_completion_sound()
-                self._show_done_dialog(ok, failed, skipped)
+                size_summary = self._format_size_summary(input_bytes, output_bytes)
+                if size_summary:
+                    self._log(size_summary)
+                self._finish_conversion(
+                    play_sound=True,
+                    show_dialog=True,
+                    ok=ok,
+                    failed=failed,
+                    skipped=skipped,
+                    input_bytes=input_bytes,
+                    output_bytes=output_bytes,
+                )
+            elif message.startswith("CANCELLED::"):
+                parts = message.split("::")
+                ok, failed, skipped, input_bytes, output_bytes = self._parse_conversion_result(parts)
+                self._log(self._format_cancelled_message(ok, failed, skipped))
+                self._finish_conversion(play_sound=False, show_dialog=False)
             else:
                 self._log(message)
         self.after(120, self._drain_log_queue)
@@ -786,17 +1350,73 @@ class OggConverterApp(TkinterDnD.Tk):
         y = self.winfo_y() + (self.winfo_height() - dlg.winfo_height()) // 2
         dlg.geometry(f"+{x}+{y}")
 
-    def _set_ui_locked(self, locked: bool) -> None:
-        try:
-            if locked:
-                self.tk.call("tk", "busy", "hold", self)
-            else:
-                self.tk.call("tk", "busy", "forget", self)
-        except Exception:
-            self.convert_btn.configure(state=tk.DISABLED if locked else tk.NORMAL)
+    def _finish_conversion(
+        self,
+        *,
+        play_sound: bool,
+        show_dialog: bool,
+        ok: int = 0,
+        failed: int = 0,
+        skipped: int = 0,
+        input_bytes: int = 0,
+        output_bytes: int = 0,
+    ) -> None:
+        self.is_converting = False
+        self.progress_frame.pack_forget()
+        self._set_ui_locked(False)
+        if play_sound:
+            self._play_completion_sound()
+        if show_dialog:
+            self._show_done_dialog(ok, failed, skipped, input_bytes, output_bytes)
 
-    def _show_done_dialog(self, ok: int, failed: int, skipped: int = 0) -> None:
-        out_dir = Path(self.output_dir.get().strip())
+    def _set_ui_locked(self, locked: bool, *, swap_convert: bool = True) -> None:
+        state = tk.DISABLED if locked else tk.NORMAL
+        for widget in (
+            self.add_files_btn,
+            self.remove_selected_btn,
+            self.clear_list_btn,
+            self.play_btn,
+            self.choose_output_btn,
+            self.quality_combo,
+            self.channels_combo,
+            self.sample_rate_combo,
+        ):
+            try:
+                widget.configure(state=state)
+            except tk.TclError:
+                pass
+        if swap_convert:
+            if locked:
+                self.convert_btn.pack_forget()
+                self.cancel_btn.pack(side=tk.RIGHT)
+                try:
+                    self.cancel_btn.configure(state=tk.NORMAL)
+                except tk.TclError:
+                    pass
+            else:
+                self.cancel_btn.pack_forget()
+                self.convert_btn.pack(side=tk.RIGHT)
+                try:
+                    self.convert_btn.configure(state=tk.NORMAL)
+                except tk.TclError:
+                    pass
+        if not locked:
+            for combo in (self.quality_combo, self.channels_combo, self.sample_rate_combo):
+                try:
+                    combo.configure(state="readonly")
+                except tk.TclError:
+                    pass
+        self._update_play_controls()
+
+    def _show_done_dialog(
+        self,
+        ok: int,
+        failed: int,
+        skipped: int = 0,
+        input_bytes: int = 0,
+        output_bytes: int = 0,
+    ) -> None:
+        out_dir = self._output_dir_path()
 
         dlg = tk.Toplevel(self)
         dlg.title(self._t("done_title"))
@@ -804,12 +1424,23 @@ class OggConverterApp(TkinterDnD.Tk):
         dlg.transient(self)
         dlg.grab_set()
 
+        summary = ttk.Frame(dlg, padding=(24, 20, 24, 12))
+        summary.pack()
+
         ttk.Label(
-            dlg,
+            summary,
             text=self._format_done_message(ok, failed, skipped),
-            padding=(24, 20, 24, 12),
             font=("", 10),
-        ).pack()
+        ).pack(anchor=tk.W)
+
+        size_summary = self._format_size_summary(input_bytes, output_bytes)
+        if size_summary:
+            ttk.Label(
+                summary,
+                text=size_summary,
+                font=("", 9),
+                foreground=self._theme.muted,
+            ).pack(anchor=tk.W, pady=(8, 0))
 
         btn_frame = ttk.Frame(dlg, padding=(16, 0, 16, 16))
         btn_frame.pack(fill=tk.X)
